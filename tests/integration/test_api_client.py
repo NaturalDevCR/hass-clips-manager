@@ -11,9 +11,10 @@ from custom_components.cinema_collections.api_client import (
     WorkerApiAuthenticationError,
     WorkerApiClient,
     WorkerApiConnectionError,
+    WorkerApiError,
     WorkerApiProtocolError,
 )
-from custom_components.cinema_collections.const import CONF_ENDPOINT, CONF_TOKEN
+from custom_components.cinema_collections.const import CONF_ENDPOINT, CONF_TOKEN, DOMAIN
 from custom_components.cinema_collections.models import WorkerHealth, WorkerStatus
 
 
@@ -37,15 +38,16 @@ class FakeResponse:
 class FakeSession:
     """Records a request and returns a configured response."""
 
-    def __init__(self, response: FakeResponse | Exception) -> None:
-        self.response = response
+    def __init__(self, response: FakeResponse | Exception | list[FakeResponse | Exception]) -> None:
+        self.response = response if isinstance(response, list) else [response]
         self.calls: list[dict[str, Any]] = []
 
     def get(self, url: str, **kwargs: Any) -> FakeResponse:
         self.calls.append({"url": url, **kwargs})
-        if isinstance(self.response, Exception):
-            raise self.response
-        return self.response
+        response = self.response.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response
 
 
 HEALTH = {
@@ -68,19 +70,15 @@ STATUS = {
 
 @pytest.mark.asyncio
 async def test_health_uses_bearer_auth_and_parses_contract() -> None:
-    session = FakeSession(FakeResponse(200, HEALTH))
-    client = WorkerApiClient("http://worker.local/", "pairing-token", session)
+    session = FakeSession(FakeResponse(200, HEALTH))  # type: ignore[arg-type]
+    client = WorkerApiClient("http://worker.local/", "pairing-token", session)  # type: ignore[arg-type]
 
     health = await client.async_health()
 
     assert health == WorkerHealth.from_dict(HEALTH)
-    assert session.calls == [
-        {
-            "url": "http://worker.local/api/v1/health",
-            "headers": {"Authorization": "Bearer pairing-token"},
-            "timeout": 10.0,
-        }
-    ]
+    assert session.calls[0]["url"] == "http://worker.local/api/v1/health"
+    assert session.calls[0]["headers"] == {"Authorization": "Bearer pairing-token"}
+    assert session.calls[0]["timeout"].total == 10.0
 
 
 @pytest.mark.asyncio
@@ -117,11 +115,63 @@ async def test_health_rejects_malformed_contract() -> None:
 @pytest.mark.asyncio
 async def test_health_maps_timeout_to_connection_error() -> None:
     client = WorkerApiClient(
-        "http://worker.local", "token", FakeSession(TimeoutError("request timed out"))
+        "http://worker.local",
+        "token",
+        FakeSession([TimeoutError("request timed out")] * 3),
     )
 
     with pytest.raises(WorkerApiConnectionError):
         await client.async_health()
+
+
+@pytest.mark.asyncio
+async def test_health_retries_retryable_response_then_succeeds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import custom_components.cinema_collections.api_client as api_client
+
+    delays: list[float] = []
+
+    async def record_sleep(delay: float) -> None:
+        delays.append(delay)
+
+    monkeypatch.setattr(api_client.asyncio, "sleep", record_sleep)
+    session = FakeSession([FakeResponse(503, {}), FakeResponse(200, HEALTH)])
+    client = WorkerApiClient("http://worker.local", "token", session)
+
+    assert await client.async_health() == WorkerHealth.from_dict(HEALTH)
+    assert len(session.calls) == 2
+    assert delays == [0.1]
+
+
+@pytest.mark.asyncio
+async def test_health_reports_failure_after_bounded_retry_exhaustion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import custom_components.cinema_collections.api_client as api_client
+
+    async def no_wait(_delay: float) -> None:
+        return None
+
+    monkeypatch.setattr(api_client.asyncio, "sleep", no_wait)
+    session = FakeSession([FakeResponse(429, {}), FakeResponse(429, {}), FakeResponse(429, {})])
+    client = WorkerApiClient("http://worker.local", "token", session)
+
+    with pytest.raises(WorkerApiError, match="HTTP status 429"):
+        await client.async_health()
+
+    assert len(session.calls) == 3
+
+
+@pytest.mark.asyncio
+async def test_health_does_not_retry_non_retryable_client_error() -> None:
+    session = FakeSession([FakeResponse(400, {}), FakeResponse(200, HEALTH)])
+    client = WorkerApiClient("http://worker.local", "token", session)  # type: ignore[arg-type]
+
+    with pytest.raises(WorkerApiError, match="HTTP status 400"):
+        await client.async_health()
+
+    assert len(session.calls) == 1
 
 
 @pytest.mark.asyncio
@@ -136,10 +186,16 @@ async def test_entry_lifecycle_recreates_per_entry_runtime_client(
 
     class Entry:
         data = {CONF_ENDPOINT: "http://worker.local", CONF_TOKEN: "pairing-token"}
+        entry_id = "test-entry"
 
+    class Hass:
+        data: dict[str, object] = {}
+
+    hass = Hass()
     entry = Entry()
-    assert await integration.async_setup_entry(object(), entry)
-    first_client = entry.runtime_data.client
-    assert await integration.async_unload_entry(object(), entry)
-    assert await integration.async_setup_entry(object(), entry)
-    assert entry.runtime_data.client is not first_client
+    assert await integration.async_setup_entry(hass, entry)
+    first_client = hass.data[DOMAIN][entry.entry_id].client
+    assert await integration.async_unload_entry(hass, entry)
+    assert DOMAIN not in hass.data
+    assert await integration.async_setup_entry(hass, entry)
+    assert hass.data[DOMAIN][entry.entry_id].client is not first_client

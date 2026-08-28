@@ -6,7 +6,7 @@ from typing import Any
 
 import voluptuous as vol
 from homeassistant import config_entries
-from homeassistant.data_entry_flow import FlowResult
+from homeassistant.config_entries import ConfigFlowResult
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .api_client import (
@@ -17,7 +17,13 @@ from .api_client import (
     WorkerApiError,
     normalize_endpoint,
 )
-from .const import CLIENT_VERSION, CONF_ENDPOINT, CONF_TOKEN, DOMAIN
+from .const import (
+    CLIENT_VERSION,
+    CONF_ENDPOINT,
+    CONF_TOKEN,
+    DOMAIN,
+    EXPECTED_WORKER_COMPONENT,
+)
 from .models import WorkerHealth
 
 
@@ -26,17 +32,23 @@ class CinemaCollectionsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     VERSION = 1
 
-    async def async_step_user(self, user_input: dict[str, Any] | None = None) -> FlowResult:
+    async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Validate the Worker endpoint, credential, and API compatibility."""
         errors: dict[str, str] = {}
         if user_input is not None:
             try:
                 endpoint = normalize_endpoint(user_input[CONF_ENDPOINT])
-                token = user_input[CONF_TOKEN].strip()
-                if not token:
+                raw_token = user_input[CONF_TOKEN]
+                if not isinstance(raw_token, str) or not raw_token.strip():
                     raise ValueError("Worker credential cannot be empty")
+                token = raw_token.strip()
                 await self.async_set_unique_id(endpoint)
                 self._abort_if_unique_id_configured()
+                if any(
+                    entry.data.get(CONF_ENDPOINT) == endpoint
+                    for entry in self._async_current_entries()
+                ):
+                    return self.async_abort(reason="already_configured")
                 client = WorkerApiClient(endpoint, token, async_get_clientsession(self.hass))
                 health = await client.async_health()
                 _validate_compatibility(health)
@@ -68,6 +80,8 @@ class CinemaCollectionsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
 def _validate_compatibility(health: WorkerHealth) -> None:
     """Reject Worker API and declared client ranges unsupported by this integration."""
+    if health.component != EXPECTED_WORKER_COMPONENT:
+        raise WorkerApiCompatibilityError("Worker component identity is incompatible")
     client_version = _parse_version(CLIENT_VERSION)
     if _parse_version(health.api_version)[0] != client_version[0]:
         raise WorkerApiCompatibilityError("Worker API major version is incompatible")

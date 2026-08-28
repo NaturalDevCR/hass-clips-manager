@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Any
+from typing import Any, cast
 
 
 class WorkerContractError(ValueError):
@@ -17,6 +17,13 @@ def _required_string(payload: Mapping[str, Any], name: str) -> str:
     if not isinstance(value, str) or not value:
         raise WorkerContractError(f"Worker response field {name!r} must be a non-empty string")
     return value
+
+
+def _required_mapping(value: Any, name: str) -> Mapping[str, Any]:
+    """Validate an object-shaped response field while preserving typed values."""
+    if not isinstance(value, Mapping):
+        raise WorkerContractError(f"Worker response field {name!r} must be an object")
+    return cast(Mapping[str, Any], value)
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,29 +96,25 @@ class WorkerStatus:
             )
 
         current_job = payload.get("current_job")
-        if current_job is not None and not isinstance(current_job, Mapping):
-            raise WorkerContractError(
-                "Worker response field 'current_job' must be an object or null"
-            )
+        if current_job is not None:
+            current_job = _required_mapping(current_job, "current_job")
 
-        storage = payload.get("storage")
-        scans = payload.get("scans")
+        storage = _required_mapping(payload.get("storage"), "storage")
+        scans = _required_mapping(payload.get("scans"), "scans")
         latest_errors = payload.get("latest_errors")
-        if not isinstance(storage, Mapping) or not isinstance(scans, Mapping):
-            raise WorkerContractError("Worker status storage and scans fields must be objects")
-        if not isinstance(latest_errors, list) or not all(
-            isinstance(error, Mapping) for error in latest_errors
-        ):
+        if not isinstance(latest_errors, list):
             raise WorkerContractError(
                 "Worker response field 'latest_errors' must be an array of objects"
             )
+        errors = tuple(
+            WorkerError.from_dict(_required_mapping(error, "latest_errors item"))
+            for error in cast(list[Any], latest_errors)
+        )
 
         return cls(
             queue_depth=queue_depth,
-            current_job=(
-                MappingProxyType(dict(current_job)) if isinstance(current_job, Mapping) else None
-            ),
+            current_job=(MappingProxyType(dict(current_job)) if current_job is not None else None),
             storage=MappingProxyType(dict(storage)),
             scans=MappingProxyType(dict(scans)),
-            latest_errors=tuple(WorkerError.from_dict(error) for error in latest_errors),
+            latest_errors=errors,
         )

@@ -92,12 +92,17 @@ def test_timeout_terminates_process_and_stops_after_retry_cap(tmp_path, monkeypa
         "cinema_collections_worker.jobs.os.killpg", lambda pid, sig: killed.append((pid, sig))
     )
 
-    result = JobWorker(
-        db,
-        resolver,
-        probe_client=_ValidProbe(),
-        process_factory=lambda *_args, **_kwargs: _NeverFinishesProcess(),
-    ).run_once()
+    try:
+        result = JobWorker(
+            db,
+            resolver,
+            probe_client=_ValidProbe(),
+            process_factory=lambda *_args, **_kwargs: _NeverFinishesProcess(),
+        ).run_once()
+    finally:
+        # The Home Assistant test plugin calls time.monotonic during teardown.
+        # Restore this module-level patch before its cleanup fixture runs.
+        monkeypatch.undo()
 
     assert result is not None and result.job.state is JobState.FAILED
     assert not result.retry_scheduled

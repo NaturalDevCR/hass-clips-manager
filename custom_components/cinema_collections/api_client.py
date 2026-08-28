@@ -2,16 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlsplit, urlunsplit
 
-try:  # Home Assistant provides aiohttp at runtime.
-    from aiohttp import ClientError
-except ImportError:  # Keeps the typed contract importable in lightweight test environments.
-    ClientError = OSError
+from aiohttp import ClientError, ClientSession, ClientTimeout
 
-from .const import API_PREFIX, DEFAULT_REQUEST_TIMEOUT
+from .const import API_PREFIX, DEFAULT_REQUEST_TIMEOUT, MAX_REQUEST_ATTEMPTS, RETRY_BACKOFF_SECONDS
 from .models import WorkerContractError, WorkerHealth, WorkerStatus
 
 
@@ -35,7 +33,11 @@ class WorkerApiCompatibilityError(WorkerApiError):
     """The paired Worker does not support this integration version."""
 
 
-def normalize_endpoint(value: str) -> str:
+class WorkerApiRetryableError(WorkerApiError):
+    """The Worker returned a transient response after bounded retries."""
+
+
+def normalize_endpoint(value: object) -> str:
     """Validate and canonicalize a Worker base URL without retaining credentials."""
     if not isinstance(value, str):
         raise ValueError("Worker endpoint must be a string")
@@ -62,16 +64,16 @@ class WorkerApiClient:
         self,
         endpoint: str,
         token: str,
-        session: Any,
+        session: ClientSession,
         *,
         timeout: float = DEFAULT_REQUEST_TIMEOUT,
     ) -> None:
         self._endpoint = normalize_endpoint(endpoint)
-        if not isinstance(token, str) or not token.strip():
+        if not token.strip():
             raise ValueError("Worker credential cannot be empty")
         self._token = token.strip()
         self._session = session
-        self._timeout = timeout
+        self._timeout = ClientTimeout(total=timeout)
 
     async def async_health(self) -> WorkerHealth:
         """Get authenticated Worker health and compatibility metadata."""
@@ -94,7 +96,19 @@ class WorkerApiClient:
             ) from error
 
     async def _async_get(self, path: str) -> Mapping[str, Any]:
-        """Request one contract endpoint with bounded time and safe errors."""
+        """Request an idempotent GET endpoint with bounded retries and safe errors."""
+        for attempt in range(MAX_REQUEST_ATTEMPTS):
+            try:
+                return await self._async_get_once(path)
+            except (WorkerApiConnectionError, WorkerApiRetryableError):
+                if attempt == MAX_REQUEST_ATTEMPTS - 1:
+                    raise
+                await asyncio.sleep(RETRY_BACKOFF_SECONDS * (2**attempt))
+
+        raise AssertionError("bounded Worker retry loop must return or raise")
+
+    async def _async_get_once(self, path: str) -> Mapping[str, Any]:
+        """Perform one GET request; only GET operations are retried by this client."""
         try:
             async with self._session.get(
                 f"{self._endpoint}{API_PREFIX}{path}",
@@ -103,6 +117,10 @@ class WorkerApiClient:
             ) as response:
                 if response.status == 401:
                     raise WorkerApiAuthenticationError("Worker rejected the configured credential")
+                if response.status in {429, 503}:
+                    raise WorkerApiRetryableError(
+                        f"Worker request failed with HTTP status {response.status}"
+                    )
                 if response.status < 200 or response.status >= 300:
                     raise WorkerApiError(
                         f"Worker request failed with HTTP status {response.status}"
@@ -115,4 +133,4 @@ class WorkerApiClient:
 
         if not isinstance(payload, Mapping):
             raise WorkerApiProtocolError("Worker response must be a JSON object")
-        return payload
+        return cast(Mapping[str, Any], payload)
