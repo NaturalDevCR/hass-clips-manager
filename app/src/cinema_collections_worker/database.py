@@ -70,6 +70,25 @@ class Database:
             )
             self.connection.execute("INSERT INTO schema_migrations VALUES (2, datetime('now'))")
             self.connection.commit()
+        if not self.connection.execute(
+            "SELECT 1 FROM schema_migrations WHERE version=3"
+        ).fetchone():
+            # A job stores an immutable compilation snapshot.  This makes a
+            # queued/retried process independent of later collection/profile edits.
+            self.connection.executescript("""
+                ALTER TABLE jobs ADD COLUMN collection_id TEXT;
+                ALTER TABLE jobs ADD COLUMN clip_id TEXT;
+                ALTER TABLE jobs ADD COLUMN fingerprint TEXT;
+                ALTER TABLE jobs ADD COLUMN payload TEXT NOT NULL DEFAULT '{}';
+                ALTER TABLE jobs ADD COLUMN attempt INTEGER NOT NULL DEFAULT 0;
+                ALTER TABLE jobs ADD COLUMN max_attempts INTEGER NOT NULL DEFAULT 3;
+                ALTER TABLE jobs ADD COLUMN cancel_requested INTEGER NOT NULL DEFAULT 0;
+                ALTER TABLE jobs ADD COLUMN started_at TEXT;
+                CREATE INDEX jobs_claim_index ON jobs(state, created_at);
+                CREATE INDEX jobs_deduplicate_index ON jobs(fingerprint, state);
+            """)
+            self.connection.execute("INSERT INTO schema_migrations VALUES (3, datetime('now'))")
+            self.connection.commit()
 
     def close(self) -> None:
         self.connection.close()
