@@ -74,3 +74,39 @@ suite passes.
   device control was introduced.
 - Services validate missing/unknown/disabled collections and avoid ambiguous
   calls when multiple config entries are loaded.
+
+## Round 1 review fixes
+
+- Explicit overrides now use a dedicated eligibility check: the selected stable
+  collection ID must be enabled and have `allow_manual_override=true`. The
+  Select and `set_collection_override` service therefore expose and accept the
+  same choices, while automatic/default semantics remain unchanged.
+- Expanded `services.yaml` so every registered service input has an English
+  description and Home Assistant selector, including optional `entry_id`,
+  collection/job IDs, compile strategy, processing behavior, and override
+  mode.
+- Added real Home Assistant registration coverage for all service schemas and
+  native platform setup/unique IDs, plus disabled, disallowed, and valid
+  explicit-override cases.
+
+### Round 1 verification
+
+```text
+.venv/bin/pytest tests/integration/test_entities.py tests/integration/test_services.py -v
+14 passed
+
+.venv/bin/pytest -q
+166 passed
+
+.venv/bin/ruff check custom_components/cinema_collections tests/integration/test_entities.py tests/integration/test_services.py
+All checks passed
+
+.venv/bin/ruff format --check custom_components/cinema_collections tests/integration/test_entities.py tests/integration/test_services.py
+18 files already formatted
+
+.venv/bin/pyright custom_components/cinema_collections
+0 errors, 0 warnings, 0 informations
+
+git diff --check
+exit 0
+```

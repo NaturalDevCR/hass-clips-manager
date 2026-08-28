@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import voluptuous as vol
 from homeassistant.core import SupportsResponse
+from homeassistant.exceptions import HomeAssistantError
 
 from custom_components.cinema_collections.history import PlaybackHistoryStore
 from custom_components.cinema_collections.resolver import CollectionPolicy
@@ -117,3 +120,119 @@ async def test_operational_actions_dispatch_only_published_worker_requests(
     ]
     assert client.calls[2][1]["strategy"] == "compile_stale_only"
     assert client.calls[3][1]["job_id"] == "job-7"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("collection", "raises"),
+    [
+        (CollectionPolicy("disabled", enabled=False), "disabled"),
+        (
+            CollectionPolicy("blocked", allow_manual_override=False),
+            "does not allow manual override",
+        ),
+        (CollectionPolicy("allowed"), None),
+    ],
+)
+async def test_explicit_override_rejects_collections_not_available_to_the_select(
+    monkeypatch, collection, raises
+) -> None:
+    """Service and Select paths share enabled/manual-override eligibility rules."""
+    from custom_components.cinema_collections import services
+    from custom_components.cinema_collections.const import DOMAIN
+
+    class ConfigEntries:
+        @staticmethod
+        def async_update_entry(entry, *, options) -> None:
+            entry.options = options
+
+    class Coordinator:
+        async def async_request_refresh(self) -> None:
+            return None
+
+    entry = SimpleNamespace(entry_id="override-entry", options={})
+    hass = SimpleNamespace(config_entries=ConfigEntries(), data={DOMAIN: {}})
+    monkeypatch.setattr(services, "policies_for_entry", lambda _entry: (collection,))
+
+    if raises is not None:
+        with pytest.raises(HomeAssistantError, match=raises):
+            await services.async_set_collection_override(
+                hass,
+                entry,
+                {"mode": "explicit", "collection_id": collection.id},
+                coordinator=Coordinator(),
+            )
+    else:
+        await services.async_set_collection_override(
+            hass,
+            entry,
+            {"mode": "explicit", "collection_id": collection.id},
+            coordinator=Coordinator(),
+        )
+        assert entry.options["override_mode"] == "explicit"
+        assert entry.options["override_collection_id"] == "allowed"
+
+
+@pytest.mark.asyncio
+async def test_home_assistant_registers_all_service_schemas(hass) -> None:
+    """Real HA registration exposes every documented service with its matching schema."""
+    from custom_components.cinema_collections.const import DOMAIN
+    from custom_components.cinema_collections.services import (
+        SERVICE_CANCEL_PROCESSING,
+        SERVICE_COMPILE_ALL,
+        SERVICE_COMPILE_COLLECTION,
+        SERVICE_RESET_HISTORY,
+        SERVICE_RETRY_FAILED,
+        SERVICE_SCAN_LIBRARY,
+        SERVICE_SET_COLLECTION_OVERRIDE,
+        async_register_services,
+    )
+
+    await async_register_services(hass)
+    registered = hass.services.async_services()[DOMAIN]
+
+    assert set(registered) == {
+        SERVICE_SELECT_NEXT_CLIP,
+        SERVICE_RESET_HISTORY,
+        SERVICE_SCAN_LIBRARY,
+        SERVICE_COMPILE_COLLECTION,
+        SERVICE_COMPILE_ALL,
+        SERVICE_RETRY_FAILED,
+        SERVICE_CANCEL_PROCESSING,
+        SERVICE_SET_COLLECTION_OVERRIDE,
+    }
+    with pytest.raises(vol.Invalid):
+        registered[SERVICE_COMPILE_COLLECTION].schema({})
+    assert (
+        registered[SERVICE_SET_COLLECTION_OVERRIDE].schema({"mode": "automatic"})["mode"]
+        == "automatic"
+    )
+    assert registered[SERVICE_SCAN_LIBRARY].schema({"collection_ids": ["films"]})[
+        "collection_ids"
+    ] == ["films"]
+
+
+def test_services_yaml_documents_every_registered_service_input() -> None:
+    """Home Assistant service UI documentation cannot drift from validation schemas."""
+    import yaml
+
+    document = yaml.safe_load(
+        (
+            Path(__file__).parents[2] / "custom_components/cinema_collections/services.yaml"
+        ).read_text()
+    )
+
+    assert {name: set(spec.get("fields", {})) for name, spec in document.items()} == {
+        "select_next_clip": {"entry_id", "collection_id", "dry_run"},
+        "reset_history": {"entry_id", "collection_id"},
+        "scan_library": {"entry_id", "collection_ids"},
+        "compile_collection": {"entry_id", "collection_id", "strategy", "skip_if_processing"},
+        "compile_all": {"entry_id", "strategy", "skip_if_processing"},
+        "retry_failed": {"entry_id", "collection_id"},
+        "cancel_processing": {"entry_id", "job_id"},
+        "set_collection_override": {"entry_id", "mode", "collection_id"},
+    }
+    for specification in document.values():
+        for field in specification.get("fields", {}).values():
+            assert field["description"]
+            assert "selector" in field

@@ -3,12 +3,16 @@ select_next_clip:
   description: Select the next ready compiled clip without controlling playback.
   fields:
     entry_id:
+      description: Optional Cinema Collections config entry when more than one is loaded.
       selector:
-        text:
+        config_entry:
+          integration: cinema_collections
     collection_id:
+      description: Optional configured collection ID. The active policy is used when omitted.
       selector:
         text:
     dry_run:
+      description: Preview the next clip without recording playback history.
       selector:
         boolean:
   response:
@@ -21,21 +25,126 @@ select_next_clip:
 reset_history:
   name: Reset playback history
   description: Reset no-repeat history globally or for one collection.
+  fields:
+    entry_id:
+      description: Optional Cinema Collections config entry when more than one is loaded.
+      selector:
+        config_entry:
+          integration: cinema_collections
+    collection_id:
+      description: Optional configured collection ID. Omit to reset all collection histories.
+      selector:
+        text:
 scan_library:
   name: Scan library
   description: Ask the Worker to scan configured source collections.
+  fields:
+    entry_id:
+      description: Optional Cinema Collections config entry when more than one is loaded.
+      selector:
+        config_entry:
+          integration: cinema_collections
+    collection_ids:
+      description: Optional list of configured collection IDs. Omit to scan all Worker collections.
+      selector:
+        text:
+          multiple: true
 compile_collection:
   name: Compile collection
   description: Ask the Worker to compile one configured collection.
+  fields:
+    entry_id:
+      description: Optional Cinema Collections config entry when more than one is loaded.
+      selector:
+        config_entry:
+          integration: cinema_collections
+    collection_id:
+      required: true
+      description: Configured collection ID to compile.
+      selector:
+        text:
+    strategy:
+      description: Worker compilation strategy.
+      default: scan_and_compile_changed_or_missing
+      selector:
+        select:
+          options:
+            - scan_and_compile_changed_or_missing
+            - compile_stale_only
+            - scan_only
+    skip_if_processing:
+      description: Do not queue work while the Worker is already processing.
+      default: true
+      selector:
+        boolean:
 compile_all:
   name: Compile all collections
   description: Ask the Worker to compile every enabled configured collection.
+  fields:
+    entry_id:
+      description: Optional Cinema Collections config entry when more than one is loaded.
+      selector:
+        config_entry:
+          integration: cinema_collections
+    strategy:
+      description: Worker compilation strategy applied to every enabled collection.
+      default: scan_and_compile_changed_or_missing
+      selector:
+        select:
+          options:
+            - scan_and_compile_changed_or_missing
+            - compile_stale_only
+            - scan_only
+    skip_if_processing:
+      description: Do not queue work while the Worker is already processing.
+      default: true
+      selector:
+        boolean:
 retry_failed:
   name: Retry failed compilation
   description: Re-request stale compilation work for configured collections.
+  fields:
+    entry_id:
+      description: Optional Cinema Collections config entry when more than one is loaded.
+      selector:
+        config_entry:
+          integration: cinema_collections
+    collection_id:
+      description: Optional configured collection ID. Omit to retry every enabled collection.
+      selector:
+        text:
 cancel_processing:
   name: Cancel processing
   description: Cooperatively cancel the active Worker job without deleting output.
+  fields:
+    entry_id:
+      description: Optional Cinema Collections config entry when more than one is loaded.
+      selector:
+        config_entry:
+          integration: cinema_collections
+    job_id:
+      description: Optional Worker job ID. Omit to cancel the currently reported job.
+      selector:
+        text:
 set_collection_override:
   name: Set collection override
   description: Set automatic, default, or explicit collection selection policy.
+  fields:
+    entry_id:
+      description: Optional Cinema Collections config entry when more than one is loaded.
+      selector:
+        config_entry:
+          integration: cinema_collections
+    mode:
+      required: true
+      description: Automatic follows policy, default selects the configured default, explicit selects a collection ID.
+      selector:
+        select:
+          options:
+            - automatic
+            - default
+            - explicit
+    collection_id:
+      description: Required only when mode is explicit; it must be enabled and allow manual override.
+      selector:
+        text:

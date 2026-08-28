@@ -159,3 +159,36 @@ async def test_select_option_persists_explicit_override_mode(monkeypatch) -> Non
 
     assert entry.options[CONF_OVERRIDE_MODE] == "explicit"
     assert entry.options[CONF_OVERRIDE_COLLECTION_ID] == "films"
+
+
+@pytest.mark.asyncio
+async def test_platform_setup_with_home_assistant_assigns_stable_unique_ids(hass) -> None:
+    """Each native platform adds its declared entities without creating a device entity."""
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    from custom_components.cinema_collections import button, select, sensor
+    from custom_components.cinema_collections.const import DOMAIN
+
+    entry = MockConfigEntry(domain=DOMAIN, entry_id="real-platform-entry")
+    entry.add_to_hass(hass)
+    coordinator = CinemaCollectionsCoordinator(
+        hass,
+        Worker(),
+        collections=lambda: (CollectionPolicy("films"),),
+        override=OverrideMode.automatic,
+        entry=entry,
+    )
+    hass.data[DOMAIN] = {entry.entry_id: SimpleNamespace(coordinator=coordinator)}
+    entities = []
+
+    def add_entities(new_entities) -> None:
+        entities.extend(new_entities)
+
+    await sensor.async_setup_entry(hass, entry, add_entities)
+    await button.async_setup_entry(hass, entry, add_entities)
+    await select.async_setup_entry(hass, entry, add_entities)
+
+    assert {entity.unique_id for entity in entities} == {
+        f"{entry.entry_id}_{description.key}"
+        for description in (*sensor.SENSOR_DESCRIPTIONS, *button.BUTTON_DESCRIPTIONS)
+    } | {f"{entry.entry_id}_{select.SELECT_DESCRIPTION.key}"}

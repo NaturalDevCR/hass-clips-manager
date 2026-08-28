@@ -155,6 +155,18 @@ def _collection_or_error(
     return collection
 
 
+def _override_collection_or_error(
+    collections: Sequence[CollectionPolicy], collection_id: object
+) -> CollectionPolicy:
+    """Require the same eligibility for explicit service and Select overrides."""
+    collection = _collection_or_error(collections, collection_id)
+    if not collection.allow_manual_override:
+        raise HomeAssistantError(
+            f"Cinema Collections collection does not allow manual override: {collection.id}"
+        )
+    return collection
+
+
 async def async_select_next_clip(
     *,
     history: PlaybackHistoryStore,
@@ -299,7 +311,7 @@ async def async_set_collection_override(
         elif option == OverrideKind.DEFAULT.value:
             mode, collection_id = OverrideKind.DEFAULT, None
         else:
-            _collection_or_error(policies_for_entry(entry), option)
+            _override_collection_or_error(policies_for_entry(entry), option)
             mode, collection_id = OverrideKind.EXPLICIT, option
     else:
         try:
@@ -310,7 +322,7 @@ async def async_set_collection_override(
             ) from error
         collection_id = data.get("collection_id")
         if mode is OverrideKind.EXPLICIT:
-            _collection_or_error(policies_for_entry(entry), collection_id)
+            _override_collection_or_error(policies_for_entry(entry), collection_id)
         elif collection_id is not None:
             raise HomeAssistantError("collection_id is allowed only for an explicit override")
 
