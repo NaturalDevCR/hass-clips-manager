@@ -6,7 +6,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from .paths import validate_collection_id
+from .paths import validate_collection_id, validate_relative_path
 
 
 class _Strict(BaseModel):
@@ -27,6 +27,11 @@ class CollectionCreate(_Strict):
     def valid_id(cls, value: str) -> str:
         return validate_collection_id(value)
 
+    @field_validator("source_directory")
+    @classmethod
+    def valid_source_directory(cls, value: str) -> str:
+        return validate_relative_path(value)
+
 
 class CollectionPatch(_Strict):
     name: str | None = Field(default=None, min_length=1)
@@ -38,6 +43,11 @@ class CollectionPatch(_Strict):
     allow_manual_override: bool | None = None
     tags: list[str] | None = None
     notes: str | None = None
+
+    @field_validator("source_directory")
+    @classmethod
+    def valid_source_directory(cls, value: str | None) -> str | None:
+        return None if value is None else validate_relative_path(value)
 
 
 class CollectionRecord(_Strict):

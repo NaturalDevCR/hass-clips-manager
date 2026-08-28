@@ -47,6 +47,16 @@ def validate_filename(value: object) -> str:
     return value
 
 
+def validate_relative_path(value: object) -> str:
+    """Validate a persisted path without allowing absolute paths or traversal."""
+    if not isinstance(value, str) or not value or _has_unsafe_characters(value):
+        raise PathSafetyError("relative path is invalid")
+    candidate = Path(value)
+    if candidate.is_absolute() or ".." in candidate.parts:
+        raise PathSafetyError("relative path must stay within its approved root")
+    return value
+
+
 class SafePathResolver:
     """Resolve paths only within canonical, explicitly configured roots."""
 

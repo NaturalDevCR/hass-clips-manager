@@ -1,4 +1,6 @@
 """SQLite connection and schema migrations owned by the Worker."""
+# SQL migration statements are intentionally kept readable.
+# ruff: noqa: E501
 
 from __future__ import annotations
 
@@ -11,7 +13,7 @@ class Database:
         self.connection = connection
 
     @classmethod
-    def create(cls, url: str) -> "Database":
+    def create(cls, url: str) -> Database:
         if url != ":memory:":
             Path(url).parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(url)
