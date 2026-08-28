@@ -1,0 +1,2 @@
+# hass-clips-manager
+
