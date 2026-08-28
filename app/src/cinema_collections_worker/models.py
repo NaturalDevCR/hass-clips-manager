@@ -19,10 +19,11 @@ from .domain import (  # noqa: E402, F401
     ProfileRecord,
 )
 from .paths import validate_collection_id
+from .profile_validation import AssetFingerprints, ProcessingProfile
 
 __all__ = [
     "ClipRecord", "ClipState", "CollectionCreate", "CollectionPatch", "CollectionRecord",
-    "CollectionRef", "ProfileCreate", "ProfilePatch", "ProfileRecord",
+    "CollectionRef", "ProfileCreate", "ProfilePatch", "ProfileRecord", "ProcessingProfile", "AssetFingerprints",
 ]
 
 
