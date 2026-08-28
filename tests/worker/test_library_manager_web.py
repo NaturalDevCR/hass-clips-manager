@@ -112,6 +112,8 @@ def test_manager_page_supports_multi_file_upload_with_cache_busted_stylesheet(
     assert 'id="scan-form"' in html
     assert "/manager/scan" not in html
     assert "'manager/scan'" in html
+    assert "Collection ID" in html
+    assert "not a folder path" in html
 
 
 def test_manager_scan_route_queues_a_library_wide_or_scoped_scan_job(tmp_path: Path) -> None:

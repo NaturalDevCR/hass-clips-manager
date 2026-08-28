@@ -87,6 +87,12 @@ section {
 
 #scan-form input { min-width: 16rem; }
 
+.field-hint {
+  margin: 0.5rem 0 0;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
 input[type="text"],
 input:not([type]),
 input[type="file"] {
