@@ -1,5 +1,7 @@
 """Source catalog discovery and conservative reconciliation."""
 # ruff: noqa: E501
+# Profile settings are user-authored JSON and validated at runtime.
+# pyright: reportUnknownVariableType=false, reportUnknownArgumentType=false, reportUnknownMemberType=false
 
 from __future__ import annotations
 
@@ -15,6 +17,7 @@ from typing import Protocol
 from .database import Database
 from .paths import PathSafetyError, RootKey, SafePathResolver, validate_relative_path
 from .probe import MediaProbeResult, ProbeClient
+from .profile_validation import AssetFingerprints, ProcessingProfile, profile_fingerprint
 
 
 class _Probe(Protocol):
@@ -69,6 +72,21 @@ class CatalogService:
                 found.append((relative, candidate))
         return found
 
+    @staticmethod
+    def _profile_fingerprint(settings: object) -> str:
+        """Fingerprint validated profile settings, tolerating incomplete legacy rows."""
+        try:
+            if isinstance(settings, dict):
+                assets = settings.get("assets", {})
+                profile = ProcessingProfile.model_validate(settings)
+                return profile_fingerprint(
+                    profile, assets if isinstance(assets, dict) else AssetFingerprints()
+                )
+        except Exception:
+            pass
+        canonical = json.dumps(settings, sort_keys=True, separators=(",", ":"), default=str)
+        return hashlib.sha256(canonical.encode()).hexdigest()
+
     def scan(self, collection_ids: set[str] | None = None) -> ScanSummary:
         selected = collection_ids
         rows = self.db.connection.execute("SELECT * FROM collections WHERE enabled=1").fetchall()
@@ -80,6 +98,12 @@ class CatalogService:
         with self.db.connection:
             for collection in rows:
                 collection_id = collection["id"]
+                profile_row = self.db.connection.execute(
+                    "SELECT settings FROM profiles WHERE id=?",
+                    (collection["processing_profile_id"],),
+                ).fetchone()
+                profile_settings = json.loads(profile_row["settings"]) if profile_row else {}
+                current_profile_fingerprint = self._profile_fingerprint(profile_settings)
                 root = self.resolver.resolve(RootKey.SOURCE.value, collection["source_directory"])
                 for relative, path in self._files(root):
                     key = (collection_id, relative)
@@ -94,6 +118,7 @@ class CatalogService:
                         probe = MediaProbeResult(valid=False, error="media probe failed")
                     metadata = {
                         "source_fingerprint": fingerprint,
+                        "profile_fingerprint": current_profile_fingerprint,
                         "has_audio": probe.has_audio,
                         "width": probe.width,
                         "height": probe.height,
@@ -158,7 +183,10 @@ class CatalogService:
                     else:
                         old_meta = json.loads(existing["metadata"])
                         changed = old_meta.get("source_fingerprint") != fingerprint
-                        if changed:
+                        profile_changed = (
+                            old_meta.get("profile_fingerprint") != current_profile_fingerprint
+                        )
+                        if changed or profile_changed:
                             state = "stale" if existing["output_available"] else state
                             modified += 1
                         else:
@@ -174,5 +202,17 @@ class CatalogService:
                                 existing["id"],
                             ),
                         )
-            # Missing files are deliberately retained; a later scan can rediscover them.
+                missing = self.db.connection.execute(
+                    "SELECT * FROM clips WHERE collection_id=?", (collection_id,)
+                ).fetchall()
+                for clip in missing:
+                    if (collection_id, clip["relative_source_path"]) not in seen and clip[
+                        "state"
+                    ] != "deleted":
+                        self.db.connection.execute(
+                            "UPDATE clips SET state=?, updated_at=? WHERE id=?",
+                            ("deleted", now, clip["id"]),
+                        )
+                        deleted += 1
+            # Missing files and their compiled outputs are deliberately retained.
         return ScanSummary(added, modified, deleted, invalid, unchanged)

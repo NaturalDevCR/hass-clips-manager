@@ -22,10 +22,18 @@ from .paths import validate_collection_id
 from .profile_validation import AssetFingerprints, ProcessingProfile
 
 __all__ = [
-    "ClipRecord", "ClipState", "CollectionCreate", "CollectionPatch", "CollectionRecord",
-    "CollectionRef", "ProfileCreate", "ProfilePatch", "ProfileRecord", "ProcessingProfile", "AssetFingerprints",
+    "ClipRecord",
+    "ClipState",
+    "CollectionCreate",
+    "CollectionPatch",
+    "CollectionRecord",
+    "CollectionRef",
+    "ProfileCreate",
+    "ProfilePatch",
+    "ProfileRecord",
+    "ProcessingProfile",
+    "AssetFingerprints",
 ]
-
 
 
 class ClipState(StrEnum):
@@ -36,6 +44,7 @@ class ClipState(StrEnum):
     READY = "ready"
     FAILED = "failed"
     STALE = "stale"
+    DELETED = "deleted"
 
 
 class CollectionRef(BaseModel):

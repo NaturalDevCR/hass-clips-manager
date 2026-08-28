@@ -1,6 +1,6 @@
 from cinema_collections_worker.catalog import CatalogService
 from cinema_collections_worker.database import Database
-from cinema_collections_worker.domain import CollectionCreate
+from cinema_collections_worker.domain import CollectionCreate, ProfileCreate
 from cinema_collections_worker.models import ClipState
 from cinema_collections_worker.paths import RootKey, SafePathResolver
 from cinema_collections_worker.probe import MediaProbeResult
@@ -24,6 +24,13 @@ class FakeProbe:
 
 def setup(tmp_path):
     db = Database.create(":memory:")
+    from cinema_collections_worker.repositories import ProfileRepository
+
+    ProfileRepository(db).create(
+        ProfileCreate(id="default", name="Default", settings={"quality": "source"}),
+        actor="t",
+        request_id="profile-1",
+    )
     CollectionRepository(db).create(
         CollectionCreate(
             id="films", name="Films", source_directory="films", processing_profile_id="default"
@@ -79,7 +86,7 @@ def test_scan_change_stales_and_missing_preserves_output(tmp_path):
     row = db.connection.execute(
         "select state, output_available from clips where id=?", (clip_id,)
     ).fetchone()
-    assert row[0] == ClipState.STALE and row[1] == 1
+    assert row[0] == ClipState.DELETED and row[1] == 1
 
 
 def test_scan_conservatively_preserves_id_on_unique_move(tmp_path):
@@ -92,3 +99,37 @@ def test_scan_conservatively_preserves_id_on_unique_move(tmp_path):
     service.scan()
     row = db.connection.execute("select id, relative_source_path from clips").fetchone()
     assert row[0] == clip_id and row[1].endswith("new.mp4")
+
+
+def test_profile_change_marks_ready_output_stale(tmp_path):
+    db, source, service = setup(tmp_path)
+    source_file = source / "one.mp4"
+    source_file.write_bytes(b"same")
+    service.scan()
+    db.connection.execute("UPDATE clips SET state='ready', output_available=1")
+    db.connection.execute(
+        "UPDATE profiles SET settings=? WHERE id='default'", ('{"quality": "high"}',)
+    )
+    db.connection.commit()
+    summary = service.scan()
+    row = db.connection.execute("SELECT state FROM clips").fetchone()
+    assert summary.modified == 1
+    assert row[0] == ClipState.STALE
+
+
+def test_missing_source_is_deleted_but_output_is_preserved(tmp_path):
+    db, source, service = setup(tmp_path)
+    source_file = source / "one.mp4"
+    source_file.write_bytes(b"same")
+    service.scan()
+    db.connection.execute(
+        "UPDATE clips SET state='ready', output_available=1, relative_output_path='films/out.mp4'"
+    )
+    db.connection.commit()
+    source_file.unlink()
+    summary = service.scan()
+    row = db.connection.execute(
+        "SELECT state, output_available, relative_output_path FROM clips"
+    ).fetchone()
+    assert summary.deleted == 1
+    assert row[0] == ClipState.DELETED and row[1] == 1 and row[2] == "films/out.mp4"
