@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import hashlib
+import html
 import json
 import shutil
 import uuid
@@ -17,7 +18,8 @@ from uuid import UUID
 
 from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query, Request, Response, status
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 
 from .auth import require_bearer_token, require_idempotency_key
@@ -33,6 +35,7 @@ from .domain import (
 )
 from .jobs import CompileRequest as InternalCompileRequest
 from .jobs import JobProgress, JobRecord, JobService, JobStage
+from .library_manager import LibraryManager
 from .models import ClipRecord
 from .paths import SafePathResolver
 from .queue import PersistentJobQueue
@@ -387,6 +390,18 @@ def create_app(settings: WorkerSettings) -> FastAPI:
     app.state.jobs = JobService(
         database, resolver, disk_reserve_bytes=settings.disk_reserve_bytes, queue=queue
     )
+    app.state.library_manager = LibraryManager(
+        database,
+        resolver,
+        trash_root=settings.data_dir / "library-trash",
+        queue=queue,
+        jobs=app.state.jobs,
+    )
+    app.mount(
+        "/static",
+        StaticFiles(directory=Path(__file__).with_name("static")),
+        name="library-manager-static",
+    )
 
     @app.middleware("http")
     async def assign_request_id(request: Request, call_next: Callable[[Request], Any]) -> Response:
@@ -445,6 +460,33 @@ def create_app(settings: WorkerSettings) -> FastAPI:
     )
     def get_health() -> Health:
         return Health()
+
+    @app.get("/", include_in_schema=False, response_class=HTMLResponse)
+    def library_manager_page() -> HTMLResponse:
+        """Small Ingress-only overview; mutations remain manager-mediated."""
+
+        rows = database.connection.execute(
+            "SELECT id, collection_id, relative_source_path, state FROM clips ORDER BY updated_at DESC, id DESC"
+        ).fetchall()
+        clip_rows = (
+            "".join(
+                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>".format(
+                    html.escape(str(row["collection_id"])),
+                    html.escape(str(row["relative_source_path"])),
+                    html.escape(str(row["state"])),
+                    html.escape(str(row["id"])),
+                )
+                for row in rows
+            )
+            or '<tr><td colspan="4">No catalogued clips yet.</td></tr>'
+        )
+        template = (
+            Path(__file__)
+            .with_name("templates")
+            .joinpath("manager.html")
+            .read_text(encoding="utf-8")
+        )
+        return HTMLResponse(template.replace("{{ clip_rows }}", clip_rows))
 
     @app.get(
         "/api/v1/status",

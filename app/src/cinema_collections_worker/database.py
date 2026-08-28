@@ -92,6 +92,29 @@ class Database:
             """)
             self.connection.execute("INSERT INTO schema_migrations VALUES (3, datetime('now'))")
             self.connection.commit()
+        if not self.connection.execute(
+            "SELECT 1 FROM schema_migrations WHERE version=4"
+        ).fetchone():
+            # Trash records deliberately retain only catalog-derived paths.
+            # They make restore explicit and ensure no background task can
+            # accidentally purge user media.
+            self.connection.executescript("""
+                CREATE TABLE trash_records (
+                    id TEXT PRIMARY KEY,
+                    clip_id TEXT NOT NULL,
+                    target TEXT NOT NULL,
+                    original_source_path TEXT,
+                    original_output_path TEXT,
+                    source_trash_path TEXT,
+                    output_trash_path TEXT,
+                    created_at TEXT NOT NULL,
+                    restored_at TEXT,
+                    FOREIGN KEY(clip_id) REFERENCES clips(id)
+                );
+                CREATE INDEX trash_records_clip_index ON trash_records(clip_id, created_at);
+            """)
+            self.connection.execute("INSERT INTO schema_migrations VALUES (4, datetime('now'))")
+            self.connection.commit()
 
     def close(self) -> None:
         self.connection.close()
