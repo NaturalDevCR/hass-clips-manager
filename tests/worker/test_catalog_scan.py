@@ -133,3 +133,23 @@ def test_missing_source_is_deleted_but_output_is_preserved(tmp_path):
     ).fetchone()
     assert summary.deleted == 1
     assert row[0] == ClipState.DELETED and row[1] == 1 and row[2] == "films/out.mp4"
+
+
+def test_deleted_source_reappears_and_restores_ready_output(tmp_path):
+    db, source, service = setup(tmp_path)
+    source_file = source / "one.mp4"
+    source_file.write_bytes(b"same")
+    service.scan()
+    db.connection.execute(
+        "UPDATE clips SET state='ready', output_available=1, relative_output_path='films/out.mp4'"
+    )
+    db.connection.commit()
+    source_file.unlink()
+    assert service.scan().deleted == 1
+    source_file.write_bytes(b"same")
+    summary = service.scan()
+    row = db.connection.execute(
+        "SELECT state, output_available, relative_output_path FROM clips"
+    ).fetchone()
+    assert summary.modified == 1
+    assert row[0] == ClipState.READY and row[1] == 1 and row[2] == "films/out.mp4"

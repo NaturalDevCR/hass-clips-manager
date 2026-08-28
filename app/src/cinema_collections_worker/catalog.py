@@ -190,8 +190,16 @@ class CatalogService:
                             state = "stale" if existing["output_available"] else state
                             modified += 1
                         else:
-                            state = existing["state"]
-                            unchanged += 1
+                            if existing["state"] == "deleted":
+                                state = (
+                                    "ready"
+                                    if existing["output_available"] and probe.valid
+                                    else ("discovered" if probe.valid else "invalid")
+                                )
+                                modified += 1
+                            else:
+                                state = existing["state"]
+                                unchanged += 1
                         self.db.connection.execute(
                             "UPDATE clips SET state=?, duration_seconds=?, metadata=?, updated_at=? WHERE id=?",
                             (
