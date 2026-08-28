@@ -478,6 +478,9 @@ class JobWorker:
             profile = ProcessingProfile.model_validate(job.profile_settings)
             timeout = profile.timeout_seconds
             measured_loudness: dict[str, float] | None = None
+            successful = False
+            cancelled = False
+            output = ""
             if profile.loudness.mode == "two_pass":
                 composed_mix = temp_dir / f"composed.{profile.output.extension}"
                 composed_job = runtime_job.model_copy(
