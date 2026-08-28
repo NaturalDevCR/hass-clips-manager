@@ -56,3 +56,31 @@ exit 0
 - The current environment has no YAML/OpenAPI validator dependency. The
   contract tests use the Python standard library against JSON-compatible YAML;
   CI may additionally run a standards validator when one is available.
+
+## Round 1 review fixes
+
+- Replaced generic `Pagination.items` with typed `CollectionsPage`,
+  `ProfilesPage`, `ClipsPage`, `JobsPage`, and `LogsPage` response schemas;
+  added the bounded `LogEntry` schema while retaining shared page metadata.
+- Added dependency-free structural OpenAPI checks for required top-level
+  sections, operation IDs, methods, responses, parameters, path variables, and
+  resolvable component references, plus typed-list assertions.
+- Updated every route shown in `docs/api.md` to include the complete
+  `/api/v1` prefix, including health, job polling, cancellation, and mutation
+  examples.
+
+### Round 1 verification
+
+```text
+.venv/bin/pytest tests/contract -v
+7 passed in 0.01s
+
+.venv/bin/ruff check tests/contract
+All checks passed!
+
+.venv/bin/python -m json.tool contract/openapi-v1.yaml
+exit 0
+
+git diff --check
+exit 0
+```

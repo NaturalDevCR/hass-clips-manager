@@ -38,9 +38,60 @@ def resolve_parameter(schema: dict, parameter: dict) -> dict:
     return schema["components"]["parameters"][name]
 
 
+def assert_valid_openapi_structure(schema: dict) -> None:
+    """Perform dependency-free structural validation of this OpenAPI 3 document."""
+    assert schema["openapi"].startswith("3.")
+    assert isinstance(schema["info"]["title"], str) and schema["info"]["title"]
+    assert isinstance(schema["info"]["version"], str) and schema["info"]["version"]
+    assert schema["servers"] and all(isinstance(server["url"], str) for server in schema["servers"])
+    assert schema["paths"]
+    components = schema["components"]
+    assert components["securitySchemes"] and components["schemas"]
+
+    valid_methods = {"get", "post", "put", "patch", "delete", "options", "head", "trace"}
+    operation_ids: set[str] = set()
+    for path, path_item in schema["paths"].items():
+        assert path.startswith("/"), path
+        assert isinstance(path_item, dict)
+        for method, operation in path_item.items():
+            if method == "parameters":
+                continue
+            assert method in valid_methods, (path, method)
+            assert isinstance(operation.get("operationId"), str)
+            assert operation["operationId"] not in operation_ids
+            operation_ids.add(operation["operationId"])
+            assert operation.get("responses")
+            for status, response in operation["responses"].items():
+                assert status.isdigit() or status.startswith("x-"), (path, status)
+                assert "$ref" in response or response.get("description"), (path, status)
+            for parameter in path_item.get("parameters", []) + operation.get("parameters", []):
+                resolved = resolve_parameter(schema, parameter)
+                assert resolved["in"] in {"path", "query", "header", "cookie"}
+                assert isinstance(resolved["name"], str)
+                if resolved["in"] == "path":
+                    assert resolved["required"] is True
+                    assert "{" + resolved["name"] + "}" in path
+
+    def check_refs(value: object) -> None:
+        if isinstance(value, dict):
+            if "$ref" in value:
+                ref = value["$ref"]
+                assert ref.startswith("#/components/")
+                section, name = ref.split("/")[2:]
+                assert name in components[section], ref
+            for child in value.values():
+                check_refs(child)
+        elif isinstance(value, list):
+            for child in value:
+                check_refs(child)
+
+    check_refs(schema)
+
+
 def test_openapi_document_has_versioned_routes_and_bearer_auth() -> None:
     schema = load_schema()
 
+    assert_valid_openapi_structure(schema)
     assert schema["openapi"].startswith("3.")
     assert schema["info"]["version"] == "1.0.0"
     assert set(schema["paths"]) == {path for _, path in EXPECTED_ROUTES}
@@ -88,3 +139,22 @@ def test_every_approved_route_is_declared() -> None:
         if method.lower() in {"get", "post", "patch"}
     }
     assert declared == EXPECTED_ROUTES
+
+
+def test_list_routes_return_typed_paginated_items() -> None:
+    schema = load_schema()
+    expected = {
+        "/api/v1/collections": "CollectionsPage",
+        "/api/v1/profiles": "ProfilesPage",
+        "/api/v1/clips": "ClipsPage",
+        "/api/v1/jobs": "JobsPage",
+        "/api/v1/logs": "LogsPage",
+    }
+    for path, schema_name in expected.items():
+        response_schema = schema["paths"][path]["get"]["responses"]["200"]["content"][
+            "application/json"
+        ]["schema"]
+        assert response_schema == {"$ref": f"#/components/schemas/{schema_name}"}
+        page_schema = schema["components"]["schemas"][schema_name]
+        item_schema = page_schema["properties"]["items"]["items"]
+        assert item_schema["$ref"].startswith("#/components/schemas/")

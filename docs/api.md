@@ -19,7 +19,7 @@ credentials receive `401` with the standard error object.
 
 ## Compatibility and versioning
 
-The URL prefix is versioned; v1 clients must use `/api/v1`. `GET /health`
+The URL prefix is versioned; v1 clients must use `/api/v1`. `GET /api/v1/health`
 returns `api_version`, `min_client_version`, and `max_client_version` in
 addition to the Worker version. Pairing is safe only when the client version
 falls within that advertised range. A client must report an incompatible
@@ -33,15 +33,16 @@ enqueue duplicate work. Reusing a key with a different request body is a
 `409` conflict. Collection and profile updates also require the
 `If-Match-Revision` header; a stale revision is rejected with `409`.
 
-Mutating routes are `POST /collections`, `PATCH /collections/{collection_id}`,
-`POST /profiles`, `PATCH /profiles/{profile_id}`, `POST /scan`,
-`POST /compile`, `POST /jobs/{job_id}/cancel`, and
-`POST /cleanup-temporaries`.
+Mutating routes are `POST /api/v1/collections`,
+`PATCH /api/v1/collections/{collection_id}`, `POST /api/v1/profiles`,
+`PATCH /api/v1/profiles/{profile_id}`, `POST /api/v1/scan`,
+`POST /api/v1/compile`, `POST /api/v1/jobs/{job_id}/cancel`, and
+`POST /api/v1/cleanup-temporaries`.
 
 ## Jobs, progress, and timeouts
 
 Scan, compile, and temporary-cleanup requests return `202` and a job object.
-Poll `GET /jobs/{job_id}` (or `GET /jobs`) for `state` and `progress`. Progress
+Poll `GET /api/v1/jobs/{job_id}` (or `GET /api/v1/jobs`) for `state` and `progress`. Progress
 has a stage, percentage, and estimated seconds remaining. The Worker runs one
 FFmpeg job at a time; `429` means the caller should back off using
 `Retry-After` when present.
@@ -54,7 +55,7 @@ then poll the job instead of holding an HTTP request open.
 
 ## Cancellation and disconnects
 
-`POST /jobs/{job_id}/cancel` requests cooperative cancellation and returns the
+`POST /api/v1/jobs/{job_id}/cancel` requests cooperative cancellation and returns the
 job with `cancelled` state. Cancellation never removes a previously successful
 compiled output. If a client disconnects while polling or after submitting a
 request, the Worker continues the accepted job; clients can reconnect and use
