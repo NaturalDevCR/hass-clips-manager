@@ -9,7 +9,21 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+# These imports are intentionally kept as public compatibility exports.
+from .domain import (  # noqa: E402, F401
+    CollectionCreate,
+    CollectionPatch,
+    CollectionRecord,
+    ProfileCreate,
+    ProfilePatch,
+    ProfileRecord,
+)
 from .paths import validate_collection_id
+
+__all__ = [
+    "ClipRecord", "ClipState", "CollectionCreate", "CollectionPatch", "CollectionRecord",
+    "CollectionRef", "ProfileCreate", "ProfilePatch", "ProfileRecord",
+]
 
 
 

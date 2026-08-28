@@ -62,6 +62,14 @@ class Database:
             """)
             self.connection.execute("INSERT INTO schema_migrations VALUES (1, datetime('now'))")
             self.connection.commit()
+        if not self.connection.execute(
+            "SELECT 1 FROM schema_migrations WHERE version=2"
+        ).fetchone():
+            self.connection.execute(
+                "ALTER TABLE idempotency_records ADD COLUMN fingerprint TEXT NOT NULL DEFAULT ''"
+            )
+            self.connection.execute("INSERT INTO schema_migrations VALUES (2, datetime('now'))")
+            self.connection.commit()
 
     def close(self) -> None:
         self.connection.close()
