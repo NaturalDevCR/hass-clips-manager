@@ -1,0 +1,172 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect Cinema Collections Worker",
+        "description": "Enter the private Worker endpoint and bearer token.",
+        "data": {
+          "endpoint": "Worker endpoint",
+          "token": "Bearer token"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Cannot connect to the Worker.",
+      "invalid_auth": "The Worker rejected the bearer token.",
+      "incompatible_worker": "This Worker version is not compatible with this integration.",
+      "invalid_endpoint": "Enter an HTTP or HTTPS base URL without credentials or a path."
+    },
+    "abort": {
+      "already_configured": "This Worker endpoint is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Collection selection",
+        "description": "Choose whether selection follows policy, uses the default collection, or uses one permitted collection.",
+        "data": {
+          "override_mode": "Selection mode",
+          "override_collection_id": "Collection for explicit mode"
+        }
+      }
+    },
+    "error": {
+      "invalid_override": "Choose a valid override mode and permitted collection."
+    }
+  },
+  "config_subentries": {
+    "collection": {
+      "title": "Collection",
+      "error": {
+        "worker_validation": "The Worker rejected this collection configuration.",
+        "invalid_collection": "Enter a valid collection configuration."
+      }
+    },
+    "profile": {
+      "title": "Processing profile",
+      "error": {
+        "worker_validation": "The Worker rejected this processing profile.",
+        "invalid_profile": "Enter a valid processing profile configuration."
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "active_collection": {"name": "Active collection"},
+      "processing_status": {"name": "Processing status"},
+      "queue_depth": {"name": "Queue depth"},
+      "latest_error": {"name": "Latest Worker error"},
+      "current_job_progress": {"name": "Current job progress"},
+      "worker_version": {"name": "Worker version"}
+    },
+    "button": {
+      "scan_library": {"name": "Scan library"},
+      "compile_all": {"name": "Compile all collections"},
+      "retry_failed": {"name": "Retry failed compilation"},
+      "cancel_processing": {"name": "Cancel processing"},
+      "cleanup_temporaries": {"name": "Clean up temporary files"},
+      "reset_history": {"name": "Reset playback history"}
+    },
+    "select": {
+      "collection_override": {
+        "name": "Collection override",
+        "state": {
+          "automatic": "Automatic",
+          "default": "Default collection"
+        }
+      }
+    }
+  },
+  "services": {
+    "select_next_clip": {
+      "name": "Select next clip",
+      "description": "Select the next ready compiled clip without controlling playback.",
+      "fields": {
+        "entry_id": {"name": "Config entry", "description": "Optional entry when more than one Worker is loaded."},
+        "collection_id": {"name": "Collection", "description": "Optional collection ID; the active policy is used when omitted."},
+        "dry_run": {"name": "Dry run", "description": "Preview the selected clip without recording playback history."}
+      },
+      "response": {
+        "media_content_id": {"name": "Media source URI", "description": "The selected clip's Media Source URI."},
+        "media_content_type": {"name": "Media content type", "description": "Always video."}
+      }
+    },
+    "reset_history": {
+      "name": "Reset playback history",
+      "description": "Reset no-repeat history globally or for one collection.",
+      "fields": {
+        "entry_id": {"name": "Config entry", "description": "Optional entry when more than one Worker is loaded."},
+        "collection_id": {"name": "Collection", "description": "Optional collection ID; omit to reset all histories."}
+      }
+    },
+    "scan_library": {
+      "name": "Scan library",
+      "description": "Ask the Worker to scan configured source collections.",
+      "fields": {
+        "entry_id": {"name": "Config entry", "description": "Optional entry when more than one Worker is loaded."},
+        "collection_ids": {"name": "Collections", "description": "Optional list of collection IDs; omit to scan all collections."}
+      }
+    },
+    "compile_collection": {
+      "name": "Compile collection",
+      "description": "Ask the Worker to compile one configured collection.",
+      "fields": {
+        "entry_id": {"name": "Config entry", "description": "Optional entry when more than one Worker is loaded."},
+        "collection_id": {"name": "Collection", "description": "Configured collection ID to compile."},
+        "strategy": {"name": "Strategy", "description": "Worker compilation strategy."},
+        "skip_if_processing": {"name": "Skip while processing", "description": "Do not queue work while the Worker is already processing."}
+      }
+    },
+    "compile_all": {
+      "name": "Compile all collections",
+      "description": "Ask the Worker to compile every enabled configured collection.",
+      "fields": {
+        "entry_id": {"name": "Config entry", "description": "Optional entry when more than one Worker is loaded."},
+        "strategy": {"name": "Strategy", "description": "Worker compilation strategy for every enabled collection."},
+        "skip_if_processing": {"name": "Skip while processing", "description": "Do not queue work while the Worker is already processing."}
+      }
+    },
+    "retry_failed": {
+      "name": "Retry failed compilation",
+      "description": "Re-request stale compilation work for configured collections.",
+      "fields": {
+        "entry_id": {"name": "Config entry", "description": "Optional entry when more than one Worker is loaded."},
+        "collection_id": {"name": "Collection", "description": "Optional collection ID; omit to retry every enabled collection."}
+      }
+    },
+    "cancel_processing": {
+      "name": "Cancel processing",
+      "description": "Cooperatively cancel the active Worker job without deleting output.",
+      "fields": {
+        "entry_id": {"name": "Config entry", "description": "Optional entry when more than one Worker is loaded."},
+        "job_id": {"name": "Job", "description": "Optional Worker job ID; omit to cancel the reported job."}
+      }
+    },
+    "set_collection_override": {
+      "name": "Set collection override",
+      "description": "Set automatic, default, or explicit collection selection policy.",
+      "fields": {
+        "entry_id": {"name": "Config entry", "description": "Optional entry when more than one Worker is loaded."},
+        "mode": {"name": "Mode", "description": "Automatic follows policy, default uses the configured default, and explicit uses a collection."},
+        "collection_id": {"name": "Collection", "description": "Required for explicit mode; it must be enabled and allow manual override."}
+      }
+    }
+  },
+  "selector": {
+    "override_mode": {
+      "options": {
+        "automatic": "Automatic",
+        "default": "Default collection",
+        "explicit": "Explicit collection"
+      }
+    },
+    "compile_strategy": {
+      "options": {
+        "scan_and_compile_changed_or_missing": "Scan and compile changed or missing clips",
+        "compile_stale_only": "Compile stale clips only",
+        "scan_only": "Scan only"
+      }
+    }
+  }
+}

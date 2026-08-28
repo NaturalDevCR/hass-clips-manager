@@ -1,0 +1,172 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Conectar el Worker de Cinema Collections",
+        "description": "Ingresa el endpoint privado del Worker y el token bearer.",
+        "data": {
+          "endpoint": "Endpoint del Worker",
+          "token": "Token bearer"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "No se puede conectar al Worker.",
+      "invalid_auth": "El Worker rechazó el token bearer.",
+      "incompatible_worker": "Esta versión del Worker no es compatible con esta integración.",
+      "invalid_endpoint": "Ingresa una URL base HTTP o HTTPS sin credenciales ni ruta."
+    },
+    "abort": {
+      "already_configured": "Este endpoint del Worker ya está configurado."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Selección de colección",
+        "description": "Elige si la selección sigue la política, usa la colección predeterminada o usa una colección permitida.",
+        "data": {
+          "override_mode": "Modo de selección",
+          "override_collection_id": "Colección para el modo explícito"
+        }
+      }
+    },
+    "error": {
+      "invalid_override": "Elige un modo de anulación válido y una colección permitida."
+    }
+  },
+  "config_subentries": {
+    "collection": {
+      "title": "Colección",
+      "error": {
+        "worker_validation": "El Worker rechazó esta configuración de colección.",
+        "invalid_collection": "Ingresa una configuración de colección válida."
+      }
+    },
+    "profile": {
+      "title": "Perfil de procesamiento",
+      "error": {
+        "worker_validation": "El Worker rechazó este perfil de procesamiento.",
+        "invalid_profile": "Ingresa una configuración de perfil de procesamiento válida."
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "active_collection": {"name": "Colección activa"},
+      "processing_status": {"name": "Estado del procesamiento"},
+      "queue_depth": {"name": "Profundidad de cola"},
+      "latest_error": {"name": "Último error del Worker"},
+      "current_job_progress": {"name": "Progreso del trabajo actual"},
+      "worker_version": {"name": "Versión del Worker"}
+    },
+    "button": {
+      "scan_library": {"name": "Escanear biblioteca"},
+      "compile_all": {"name": "Compilar todas las colecciones"},
+      "retry_failed": {"name": "Reintentar compilación fallida"},
+      "cancel_processing": {"name": "Cancelar procesamiento"},
+      "cleanup_temporaries": {"name": "Limpiar archivos temporales"},
+      "reset_history": {"name": "Restablecer historial de reproducción"}
+    },
+    "select": {
+      "collection_override": {
+        "name": "Anulación de colección",
+        "state": {
+          "automatic": "Automático",
+          "default": "Colección predeterminada"
+        }
+      }
+    }
+  },
+  "services": {
+    "select_next_clip": {
+      "name": "Seleccionar siguiente clip",
+      "description": "Selecciona el siguiente clip compilado listo sin controlar la reproducción.",
+      "fields": {
+        "entry_id": {"name": "Entrada de configuración", "description": "Entrada opcional cuando hay más de un Worker cargado."},
+        "collection_id": {"name": "Colección", "description": "ID de colección opcional; se usa la política activa si se omite."},
+        "dry_run": {"name": "Ejecución en seco", "description": "Previsualiza el clip sin registrar el historial de reproducción."}
+      },
+      "response": {
+        "media_content_id": {"name": "URI de fuente multimedia", "description": "La URI de Media Source del clip seleccionado."},
+        "media_content_type": {"name": "Tipo de contenido multimedia", "description": "Siempre video."}
+      }
+    },
+    "reset_history": {
+      "name": "Restablecer historial de reproducción",
+      "description": "Restablece el historial sin repetición globalmente o para una colección.",
+      "fields": {
+        "entry_id": {"name": "Entrada de configuración", "description": "Entrada opcional cuando hay más de un Worker cargado."},
+        "collection_id": {"name": "Colección", "description": "ID de colección opcional; omítelo para restablecer todos los historiales."}
+      }
+    },
+    "scan_library": {
+      "name": "Escanear biblioteca",
+      "description": "Pide al Worker escanear las colecciones de origen configuradas.",
+      "fields": {
+        "entry_id": {"name": "Entrada de configuración", "description": "Entrada opcional cuando hay más de un Worker cargado."},
+        "collection_ids": {"name": "Colecciones", "description": "Lista opcional de IDs; omítela para escanear todas las colecciones."}
+      }
+    },
+    "compile_collection": {
+      "name": "Compilar colección",
+      "description": "Pide al Worker compilar una colección configurada.",
+      "fields": {
+        "entry_id": {"name": "Entrada de configuración", "description": "Entrada opcional cuando hay más de un Worker cargado."},
+        "collection_id": {"name": "Colección", "description": "ID de colección configurado para compilar."},
+        "strategy": {"name": "Estrategia", "description": "Estrategia de compilación del Worker."},
+        "skip_if_processing": {"name": "Omitir mientras procesa", "description": "No encola trabajo mientras el Worker ya procesa."}
+      }
+    },
+    "compile_all": {
+      "name": "Compilar todas las colecciones",
+      "description": "Pide al Worker compilar todas las colecciones configuradas habilitadas.",
+      "fields": {
+        "entry_id": {"name": "Entrada de configuración", "description": "Entrada opcional cuando hay más de un Worker cargado."},
+        "strategy": {"name": "Estrategia", "description": "Estrategia de compilación para cada colección habilitada."},
+        "skip_if_processing": {"name": "Omitir mientras procesa", "description": "No encola trabajo mientras el Worker ya procesa."}
+      }
+    },
+    "retry_failed": {
+      "name": "Reintentar compilación fallida",
+      "description": "Vuelve a solicitar trabajo de compilación obsoleto para colecciones configuradas.",
+      "fields": {
+        "entry_id": {"name": "Entrada de configuración", "description": "Entrada opcional cuando hay más de un Worker cargado."},
+        "collection_id": {"name": "Colección", "description": "ID de colección opcional; omítelo para reintentar todas las colecciones habilitadas."}
+      }
+    },
+    "cancel_processing": {
+      "name": "Cancelar procesamiento",
+      "description": "Cancela cooperativamente el trabajo activo del Worker sin borrar la salida.",
+      "fields": {
+        "entry_id": {"name": "Entrada de configuración", "description": "Entrada opcional cuando hay más de un Worker cargado."},
+        "job_id": {"name": "Trabajo", "description": "ID de trabajo opcional; omítelo para cancelar el trabajo informado."}
+      }
+    },
+    "set_collection_override": {
+      "name": "Establecer anulación de colección",
+      "description": "Establece la política de selección automática, predeterminada o explícita.",
+      "fields": {
+        "entry_id": {"name": "Entrada de configuración", "description": "Entrada opcional cuando hay más de un Worker cargado."},
+        "mode": {"name": "Modo", "description": "Automático sigue la política, predeterminado usa la colección configurada y explícito usa una colección."},
+        "collection_id": {"name": "Colección", "description": "Obligatorio para modo explícito; debe estar habilitada y permitir anulación manual."}
+      }
+    }
+  },
+  "selector": {
+    "override_mode": {
+      "options": {
+        "automatic": "Automático",
+        "default": "Colección predeterminada",
+        "explicit": "Colección explícita"
+      }
+    },
+    "compile_strategy": {
+      "options": {
+        "scan_and_compile_changed_or_missing": "Escanear y compilar clips modificados o faltantes",
+        "compile_stale_only": "Compilar solo clips obsoletos",
+        "scan_only": "Solo escanear"
+      }
+    }
+  }
+}
