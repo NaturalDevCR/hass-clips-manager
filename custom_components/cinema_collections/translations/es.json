@@ -38,6 +38,50 @@
   "config_subentries": {
     "collection": {
       "title": "Colección",
+      "step": {
+        "user": {
+          "data": {
+            "collection_id": "ID de colección",
+            "name": "Nombre",
+            "source_directory": "Directorio de origen",
+            "processing_profile_id": "ID de perfil de procesamiento",
+            "enabled": "Habilitada",
+            "priority": "Prioridad",
+            "starts_at": "Inicia el",
+            "ends_at": "Finaliza el",
+            "is_default": "Colección predeterminada",
+            "allow_manual_override": "Permitir anulación manual",
+            "tags": "Etiquetas",
+            "notes": "Notas",
+            "schedule_enabled": "Habilitar programación",
+            "schedule_weekdays": "Días de programación",
+            "schedule_time": "Hora de programación",
+            "schedule_strategy": "Estrategia de programación",
+            "schedule_skip_if_processing": "Omitir programación mientras procesa"
+          }
+        },
+        "reconfigure": {
+          "data": {
+            "collection_id": "ID de colección",
+            "name": "Nombre",
+            "source_directory": "Directorio de origen",
+            "processing_profile_id": "ID de perfil de procesamiento",
+            "enabled": "Habilitada",
+            "priority": "Prioridad",
+            "starts_at": "Inicia el",
+            "ends_at": "Finaliza el",
+            "is_default": "Colección predeterminada",
+            "allow_manual_override": "Permitir anulación manual",
+            "tags": "Etiquetas",
+            "notes": "Notas",
+            "schedule_enabled": "Habilitar programación",
+            "schedule_weekdays": "Días de programación",
+            "schedule_time": "Hora de programación",
+            "schedule_strategy": "Estrategia de programación",
+            "schedule_skip_if_processing": "Omitir programación mientras procesa"
+          }
+        }
+      },
       "error": {
         "worker_validation": "El Worker rechazó esta configuración de colección.",
         "invalid_collection": "Ingresa una configuración de colección válida."
@@ -45,6 +89,22 @@
     },
     "profile": {
       "title": "Perfil de procesamiento",
+      "step": {
+        "user": {
+          "data": {
+            "profile_id": "ID de perfil",
+            "name": "Nombre",
+            "settings": "Configuración del perfil (JSON)"
+          }
+        },
+        "reconfigure": {
+          "data": {
+            "profile_id": "ID de perfil",
+            "name": "Nombre",
+            "settings": "Configuración del perfil (JSON)"
+          }
+        }
+      },
       "error": {
         "worker_validation": "El Worker rechazó este perfil de procesamiento.",
         "invalid_profile": "Ingresa una configuración de perfil de procesamiento válida."

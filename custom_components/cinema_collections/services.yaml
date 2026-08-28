@@ -68,6 +68,7 @@ compile_collection:
       default: scan_and_compile_changed_or_missing
       selector:
         select:
+          translation_key: compile_strategy
           options:
             - scan_and_compile_changed_or_missing
             - compile_stale_only
@@ -91,6 +92,7 @@ compile_all:
       default: scan_and_compile_changed_or_missing
       selector:
         select:
+          translation_key: compile_strategy
           options:
             - scan_and_compile_changed_or_missing
             - compile_stale_only
@@ -140,6 +142,7 @@ set_collection_override:
       description: Automatic follows policy, default selects the configured default, explicit selects a collection ID.
       selector:
         select:
+          translation_key: override_mode
           options:
             - automatic
             - default

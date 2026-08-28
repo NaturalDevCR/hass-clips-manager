@@ -8,11 +8,14 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+import yaml
 
 from custom_components.cinema_collections.const import DOMAIN
 from custom_components.cinema_collections.coordinator import CoordinatorSnapshot
 from custom_components.cinema_collections.diagnostics import async_get_config_entry_diagnostics
 from custom_components.cinema_collections.models import WorkerError, WorkerHealth, WorkerStatus
+from custom_components.cinema_collections.options_flow import OVERRIDE_MODE_SELECTOR
+from custom_components.cinema_collections.subentries import _collection_schema, _profile_schema
 
 
 @pytest.mark.asyncio
@@ -133,6 +136,13 @@ def test_translation_files_are_complete_and_cover_the_integration_surface() -> N
         "worker_validation",
         "invalid_profile",
     }
+    for subentry_type, schema in {
+        "collection": _collection_schema(None),
+        "profile": _profile_schema(None),
+    }.items():
+        fields = {str(getattr(field, "schema", field)) for field in schema.schema}
+        for step in ("user", "reconfigure"):
+            assert set(english["config_subentries"][subentry_type]["step"][step]["data"]) == fields
     assert set(english["entity"]) >= {"sensor", "button", "select"}
     assert "collection_override" in english["entity"]["select"]
     assert set(english["entity"]["select"]["collection_override"]["state"]) == {
@@ -149,3 +159,29 @@ def test_translation_files_are_complete_and_cover_the_integration_surface() -> N
         "cancel_processing",
         "set_collection_override",
     }
+    assert OVERRIDE_MODE_SELECTOR.config["translation_key"] == "override_mode"
+    assert set(english["selector"]["override_mode"]["options"]) == set(
+        OVERRIDE_MODE_SELECTOR.config["options"]
+    )
+
+    with (Path(__file__).parents[2] / "custom_components/cinema_collections/services.yaml").open(
+        encoding="utf-8"
+    ) as file:
+        services = yaml.safe_load(file)
+    for service in ("compile_collection", "compile_all"):
+        assert (
+            services[service]["fields"]["strategy"]["selector"]["select"]["translation_key"]
+            == "compile_strategy"
+        )
+        assert set(services[service]["fields"]["strategy"]["selector"]["select"]["options"]) == set(
+            english["selector"]["compile_strategy"]["options"]
+        )
+    assert (
+        services["set_collection_override"]["fields"]["mode"]["selector"]["select"][
+            "translation_key"
+        ]
+        == "override_mode"
+    )
+    assert set(
+        services["set_collection_override"]["fields"]["mode"]["selector"]["select"]["options"]
+    ) == set(english["selector"]["override_mode"]["options"])

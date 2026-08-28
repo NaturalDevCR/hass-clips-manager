@@ -38,6 +38,50 @@
   "config_subentries": {
     "collection": {
       "title": "Collection",
+      "step": {
+        "user": {
+          "data": {
+            "collection_id": "Collection ID",
+            "name": "Name",
+            "source_directory": "Source directory",
+            "processing_profile_id": "Processing profile ID",
+            "enabled": "Enabled",
+            "priority": "Priority",
+            "starts_at": "Starts at",
+            "ends_at": "Ends at",
+            "is_default": "Default collection",
+            "allow_manual_override": "Allow manual override",
+            "tags": "Tags",
+            "notes": "Notes",
+            "schedule_enabled": "Enable schedule",
+            "schedule_weekdays": "Schedule weekdays",
+            "schedule_time": "Schedule time",
+            "schedule_strategy": "Schedule strategy",
+            "schedule_skip_if_processing": "Skip schedule while processing"
+          }
+        },
+        "reconfigure": {
+          "data": {
+            "collection_id": "Collection ID",
+            "name": "Name",
+            "source_directory": "Source directory",
+            "processing_profile_id": "Processing profile ID",
+            "enabled": "Enabled",
+            "priority": "Priority",
+            "starts_at": "Starts at",
+            "ends_at": "Ends at",
+            "is_default": "Default collection",
+            "allow_manual_override": "Allow manual override",
+            "tags": "Tags",
+            "notes": "Notes",
+            "schedule_enabled": "Enable schedule",
+            "schedule_weekdays": "Schedule weekdays",
+            "schedule_time": "Schedule time",
+            "schedule_strategy": "Schedule strategy",
+            "schedule_skip_if_processing": "Skip schedule while processing"
+          }
+        }
+      },
       "error": {
         "worker_validation": "The Worker rejected this collection configuration.",
         "invalid_collection": "Enter a valid collection configuration."
@@ -45,6 +89,22 @@
     },
     "profile": {
       "title": "Processing profile",
+      "step": {
+        "user": {
+          "data": {
+            "profile_id": "Profile ID",
+            "name": "Name",
+            "settings": "Profile settings (JSON)"
+          }
+        },
+        "reconfigure": {
+          "data": {
+            "profile_id": "Profile ID",
+            "name": "Name",
+            "settings": "Profile settings (JSON)"
+          }
+        }
+      },
       "error": {
         "worker_validation": "The Worker rejected this processing profile.",
         "invalid_profile": "Enter a valid processing profile configuration."

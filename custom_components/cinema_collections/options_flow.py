@@ -7,9 +7,17 @@ from typing import Any
 import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.config_entries import ConfigFlowResult
+from homeassistant.helpers import selector
 
 from .const import CONF_OVERRIDE_COLLECTION_ID, CONF_OVERRIDE_MODE
 from .resolver import OverrideKind, OverrideMode
+
+OVERRIDE_MODE_SELECTOR: Any = selector.SelectSelector(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+    {
+        "options": [item.value for item in OverrideKind],
+        "translation_key": "override_mode",
+    }
+)
 
 
 class CinemaCollectionsOptionsFlow(config_entries.OptionsFlow):
@@ -46,7 +54,7 @@ class CinemaCollectionsOptionsFlow(config_entries.OptionsFlow):
                     vol.Required(
                         CONF_OVERRIDE_MODE,
                         default=defaults.get(CONF_OVERRIDE_MODE, OverrideKind.AUTOMATIC.value),
-                    ): vol.In([item.value for item in OverrideKind]),
+                    ): OVERRIDE_MODE_SELECTOR,
                     vol.Optional(
                         CONF_OVERRIDE_COLLECTION_ID,
                         default=defaults.get(CONF_OVERRIDE_COLLECTION_ID, ""),
