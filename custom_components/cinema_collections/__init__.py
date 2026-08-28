@@ -14,6 +14,7 @@ from homeassistant.helpers.event import async_track_time_change
 
 from .api_client import WorkerApiClient, WorkerApiError
 from .const import CONF_ENDPOINT, CONF_TOKEN, DOMAIN
+from .history import PlaybackHistoryStore
 from .scheduler import CompilationScheduler, ConfigEntryRunTokenStore
 from .subentries import collection_subentries
 
@@ -25,6 +26,7 @@ class CinemaCollectionsRuntimeData:
     """In-memory state owned by exactly one config entry."""
 
     client: WorkerApiClient
+    history: PlaybackHistoryStore | None = None
     scheduler: CompilationScheduler | None = None
     cancel_schedule: Callable[[], None] | None = None
 
@@ -38,6 +40,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
     scheduler: CompilationScheduler | None = None
     cancel_schedule: Callable[[], None] | None = None
+    history: PlaybackHistoryStore | None = None
     # A small guard keeps the client-only lifecycle usable in isolated tests.
     if getattr(hass, "bus", None) is not None:
         scheduler = CompilationScheduler(
@@ -59,8 +62,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 )
 
         cancel_schedule = async_track_time_change(hass, async_dispatch_due, second=0)
+    # History owns its own local-midnight listener. Set it up here, rather than
+    # waiting for a service call, so a restart reconciles a missed reset early.
+    if getattr(hass, "config", None) is not None:
+        history = PlaybackHistoryStore(
+            hass,
+            storage_key=f"{DOMAIN}.{entry.entry_id}.playback_history",
+        )
+        await history.async_setup()
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = CinemaCollectionsRuntimeData(
         client=client,
+        history=history,
         scheduler=scheduler,
         cancel_schedule=cancel_schedule,
     )
@@ -74,6 +86,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         runtime = runtime_data.pop(entry.entry_id, None)
         if runtime is not None and runtime.cancel_schedule is not None:
             runtime.cancel_schedule()
+        if runtime is not None and runtime.history is not None:
+            await runtime.history.async_shutdown()
         if not runtime_data:
             hass.data.pop(DOMAIN)
     return True

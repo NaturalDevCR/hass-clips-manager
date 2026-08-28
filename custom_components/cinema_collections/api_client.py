@@ -10,7 +10,7 @@ from urllib.parse import urlsplit, urlunsplit
 from aiohttp import ClientError, ClientSession, ClientTimeout
 
 from .const import API_PREFIX, DEFAULT_REQUEST_TIMEOUT, MAX_REQUEST_ATTEMPTS, RETRY_BACKOFF_SECONDS
-from .models import WorkerContractError, WorkerHealth, WorkerStatus
+from .models import WorkerClip, WorkerContractError, WorkerHealth, WorkerStatus
 
 
 class WorkerApiError(RuntimeError):
@@ -102,6 +102,39 @@ class WorkerApiClient:
             raise WorkerApiProtocolError(
                 "Worker status response did not match the API contract"
             ) from error
+
+    async def async_list_clips(self) -> tuple[WorkerClip, ...]:
+        """Return every Worker catalog clip with its live output availability."""
+        page = 1
+        clips: list[WorkerClip] = []
+        while True:
+            payload = await self._async_get(f"/clips?page={page}&page_size=100")
+            try:
+                total = payload.get("total")
+                raw_items = payload.get("items")
+                if isinstance(total, bool) or not isinstance(total, int) or total < 0:
+                    raise WorkerContractError(
+                        "Worker clips response field 'total' must be an integer"
+                    )
+                if not isinstance(raw_items, list):
+                    raise WorkerContractError(
+                        "Worker clips response field 'items' must be an array"
+                    )
+                items = cast(list[object], raw_items)
+                if not all(isinstance(item, Mapping) for item in items):
+                    raise WorkerContractError("Worker clips response items must be objects")
+                clips.extend(WorkerClip.from_dict(cast(Mapping[str, Any], item)) for item in items)
+            except WorkerContractError as error:
+                raise WorkerApiProtocolError(
+                    "Worker clips response did not match the API contract"
+                ) from error
+            if len(clips) >= total:
+                return tuple(clips[:total])
+            if not items:
+                raise WorkerApiProtocolError(
+                    "Worker clips response ended before its declared total"
+                )
+            page += 1
 
     async def async_create_collection(
         self, payload: Mapping[str, object], *, idempotency_key: str

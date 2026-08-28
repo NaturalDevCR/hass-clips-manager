@@ -27,6 +27,47 @@ def _required_mapping(value: Any, name: str) -> Mapping[str, Any]:
 
 
 @dataclass(frozen=True, slots=True)
+class WorkerClip:
+    """The Worker-owned live output availability needed for clip selection."""
+
+    id: str
+    collection_id: str
+    state: str
+    relative_output_path: str | None
+    duration_seconds: float
+    output_available: bool
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> WorkerClip:
+        """Parse the public subset of a Worker catalog clip used by the integration."""
+        relative_output_path = payload.get("relative_output_path")
+        if relative_output_path is not None and not isinstance(relative_output_path, str):
+            raise WorkerContractError(
+                "Worker response field 'relative_output_path' must be a string or null"
+            )
+        duration_seconds = payload.get("duration_seconds")
+        if (
+            isinstance(duration_seconds, bool)
+            or not isinstance(duration_seconds, (int, float))
+            or duration_seconds < 0
+        ):
+            raise WorkerContractError(
+                "Worker response field 'duration_seconds' must be a non-negative number"
+            )
+        output_available = payload.get("output_available")
+        if not isinstance(output_available, bool):
+            raise WorkerContractError("Worker response field 'output_available' must be boolean")
+        return cls(
+            id=_required_string(payload, "id"),
+            collection_id=_required_string(payload, "collection_id"),
+            state=_required_string(payload, "state"),
+            relative_output_path=relative_output_path,
+            duration_seconds=float(duration_seconds),
+            output_available=output_available,
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class WorkerHealth:
     """Worker liveness and client-compatibility information."""
 
