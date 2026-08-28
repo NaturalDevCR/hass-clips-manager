@@ -417,6 +417,38 @@ class LibraryManager:
             {"collection_id": row["collection_id"], "job_id": job.id},
         )
 
+    def request_library_scan(self, collection_id: str | None = None) -> AuditEvent:
+        """Discover new/changed/removed source files without an existing clip record.
+
+        Scans every configured collection's source directory when
+        collection_id is None, or only the named collection otherwise. This
+        lets the Library Manager catalog files already placed under an
+        allowlisted source root (e.g. copied there directly, or via Samba/
+        the Home Assistant Files add-on) without requiring an HTTP upload.
+        """
+        job_id = str(uuid.uuid4())
+        payload: dict[str, Any] = {"collection_ids": [collection_id]} if collection_id else {}
+        job = self.queue.enqueue(
+            JobRecord(
+                id=job_id,
+                kind="scan",
+                collection_id=collection_id or "system",
+                clip_id=job_id,
+                source_relative_path=f"scan/{job_id}.request",
+                output_relative_path=f"scan/{job_id}.result",
+                source_fingerprint="library-request",
+                profile_fingerprint="library-request",
+                profile_settings=payload,
+                duration_seconds=0,
+                progress=JobProgress(stage=JobStage.QUEUED, percent=0, eta_seconds=None),
+            )
+        )
+        return self._audit(
+            "library.scan_requested",
+            collection_id or "system",
+            {"collection_id": collection_id, "job_id": job.id},
+        )
+
     def request_recompile(self, clip_id: str | UUID) -> AuditEvent:
         row = self._clip_row(clip_id)
         if row["state"] != ClipState.DELETED.value:

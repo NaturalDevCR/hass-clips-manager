@@ -92,9 +92,40 @@ def test_manager_page_only_uses_ingress_safe_relative_action_urls(tmp_path: Path
 
     html = client.get("/", headers={"X-Ingress-Path": "/api/hassio_ingress/session"}).text
 
-    assert "fetch(`/manager" not in html
+    assert "/manager/upload" not in html
+    assert "/manager/clips" not in html
     assert "`manager/upload?collection_id=" in html
     assert "`manager/clips/${id}/${action}`" in html
+
+
+def test_manager_page_supports_multi_file_upload_with_cache_busted_stylesheet(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(_app(tmp_path))
+    _manager_session(client)
+
+    html = client.get("/", headers={"X-Ingress-Path": "/api/hassio_ingress/session"}).text
+
+    assert 'type="file" accept="video/*" multiple required' in html
+    assert 'href="static/manager.css?v=' in html
+    assert 'id="upload-progress"' in html
+    assert 'id="scan-form"' in html
+    assert "/manager/scan" not in html
+    assert "'manager/scan'" in html
+
+
+def test_manager_scan_route_queues_a_library_wide_or_scoped_scan_job(tmp_path: Path) -> None:
+    client = TestClient(_app(tmp_path))
+    _seed_collection(client)
+    csrf = _manager_session(client)
+    headers = {"X-CSRF-Token": csrf}
+
+    library_wide = client.post("/manager/scan", headers=headers)
+    scoped = client.post("/manager/scan?collection_id=films", headers=headers)
+
+    assert library_wide.status_code == scoped.status_code == 202
+    assert library_wide.json()["details"]["collection_id"] is None
+    assert scoped.json()["details"]["collection_id"] == "films"
 
 
 def test_external_manager_requires_bearer_before_issuing_session(tmp_path: Path) -> None:

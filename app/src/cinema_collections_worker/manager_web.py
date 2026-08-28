@@ -18,6 +18,14 @@ from pydantic import BaseModel, ConfigDict, Field
 from .library_manager import DeleteTarget, LibraryManager, TrashTarget
 from .settings import WorkerMode, WorkerSettings
 
+
+# Local import avoids a circular import at module load time (api imports this module).
+def _worker_version() -> str:
+    from .api import WORKER_VERSION
+
+    return WORKER_VERSION
+
+
 _COOKIE = "cinema_collections_manager"
 _SESSION_SECONDS = 60 * 60
 
@@ -120,8 +128,10 @@ def _render_manager(request: Request, csrf: str) -> str:
     template = (
         Path(__file__).with_name("templates").joinpath("manager.html").read_text(encoding="utf-8")
     )
-    return template.replace("{{ clip_rows }}", clip_rows).replace(
-        "{{ csrf_token }}", html.escape(csrf, quote=True)
+    return (
+        template.replace("{{ clip_rows }}", clip_rows)
+        .replace("{{ csrf_token }}", html.escape(csrf, quote=True))
+        .replace("{{ asset_version }}", html.escape(_worker_version(), quote=True))
     )
 
 
@@ -157,6 +167,14 @@ def install_manager_routes(app: FastAPI, settings: WorkerSettings) -> None:
         page.headers["X-CSRF-Token"] = csrf
         page.headers["Cache-Control"] = "no-store"
         return page
+
+    @app.post("/manager/scan", status_code=202, include_in_schema=False)
+    def scan_library(
+        request: Request,
+        collection_id: Annotated[str | None, Query(min_length=1)] = None,
+        csrf: Annotated[str | None, Header(alias="X-CSRF-Token")] = None,
+    ) -> Any:
+        return _dump(_require_action(request, csrf).request_library_scan(collection_id))
 
     @app.post("/manager/upload", status_code=201, include_in_schema=False)
     async def upload(

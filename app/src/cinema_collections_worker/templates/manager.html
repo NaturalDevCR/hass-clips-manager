@@ -5,20 +5,35 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="csrf-token" content="{{ csrf_token }}">
     <title>Cinema Collections Library Manager</title>
-    <link rel="stylesheet" href="static/manager.css">
+    <link rel="stylesheet" href="static/manager.css?v={{ asset_version }}">
   </head>
   <body>
     <main>
       <h1>Cinema Collections Library Manager</h1>
       <p>Files are managed through their catalog record. Source and compiled output are always selected separately.</p>
       <section>
-        <h2>Import a source clip</h2>
+        <h2>Import source clips</h2>
         <form id="upload-form">
           <label>Collection <input name="collection" required></label>
-          <label>Video <input name="file" type="file" accept="video/*" required></label>
+          <label>Video(s) <input name="file" type="file" accept="video/*" multiple required></label>
           <button type="submit">Upload</button>
         </form>
+        <div id="upload-progress" class="upload-progress" hidden>
+          <div class="upload-progress-bar"><div id="upload-progress-fill" class="upload-progress-fill"></div></div>
+          <p id="upload-progress-label" class="upload-progress-label"></p>
+        </div>
         <p id="result" role="status"></p>
+      </section>
+      <section>
+        <h2>Scan for files already on disk</h2>
+        <p>If your clips are already inside a collection's configured source folder
+          (copied there directly, over Samba, or with the Home Assistant Files
+          add-on), scan instead of uploading them again.</p>
+        <form id="scan-form">
+          <label>Collection <input name="collection" placeholder="Leave empty to scan every collection"></label>
+          <button type="submit">Scan library</button>
+        </form>
+        <p id="scan-result" role="status"></p>
       </section>
       <table>
         <thead><tr><th>Collection</th><th>Source</th><th>State</th><th>Clip ID</th><th>Actions</th></tr></thead>
@@ -28,6 +43,10 @@
     <script>
       window.managerCsrf = document.querySelector('meta[name="csrf-token"]').content;
       const result = document.getElementById('result');
+      const progressWrap = document.getElementById('upload-progress');
+      const progressFill = document.getElementById('upload-progress-fill');
+      const progressLabel = document.getElementById('upload-progress-label');
+
       async function act(url, options = {}) {
         options.headers = {...(options.headers || {}), 'X-CSRF-Token': window.managerCsrf};
         const response = await fetch(url, options);
@@ -40,17 +59,97 @@
         }
         return body;
       }
+
+      // fetch() exposes no upload-progress event, so a single-file upload
+      // uses XHR directly to drive the progress bar.
+      function uploadWithProgress(url, file, onProgress) {
+        return new Promise((resolve, reject) => {
+          const xhr = new XMLHttpRequest();
+          xhr.open('POST', url);
+          xhr.setRequestHeader('X-CSRF-Token', window.managerCsrf);
+          xhr.setRequestHeader('X-Filename', file.name);
+          xhr.upload.addEventListener('progress', event => {
+            if (event.lengthComputable) onProgress(event.loaded / event.total);
+          });
+          xhr.addEventListener('load', () => {
+            let body = null;
+            try { body = xhr.responseText ? JSON.parse(xhr.responseText) : null; } catch { body = null; }
+            if (xhr.status >= 200 && xhr.status < 300) {
+              resolve(body);
+            } else {
+              reject(new Error((body && body.message) || `Request failed (HTTP ${xhr.status})`));
+            }
+          });
+          xhr.addEventListener('error', () => reject(new Error('Network error during upload')));
+          xhr.send(file);
+        });
+      }
+
       document.getElementById('upload-form').addEventListener('submit', async event => {
         event.preventDefault();
-        const data = new FormData(event.currentTarget);
-        const file = data.get('file');
-        try {
-          await act(`manager/upload?collection_id=${encodeURIComponent(data.get('collection'))}`, {
-            method: 'POST', headers: {'X-Filename': file.name}, body: file
-          });
+        const form = event.currentTarget;
+        const data = new FormData(form);
+        const files = data.getAll('file').filter(entry => entry instanceof File && entry.size > 0);
+        const collection = encodeURIComponent(data.get('collection'));
+        if (files.length === 0) return;
+
+        result.textContent = '';
+        form.querySelector('button[type="submit"]').disabled = true;
+        progressWrap.hidden = false;
+
+        const failures = [];
+        for (let index = 0; index < files.length; index += 1) {
+          const file = files[index];
+          const base = index / files.length;
+          const span = 1 / files.length;
+          progressLabel.textContent = `Uploading ${index + 1} of ${files.length}: ${file.name}`;
+          try {
+            await uploadWithProgress(
+              `manager/upload?collection_id=${collection}`,
+              file,
+              fraction => { progressFill.style.width = `${Math.round((base + fraction * span) * 100)}%`; }
+            );
+          } catch (error) {
+            failures.push(`${file.name}: ${error.message}`);
+          }
+        }
+
+        progressFill.style.width = '100%';
+        form.querySelector('button[type="submit"]').disabled = false;
+
+        if (failures.length === 0) {
           location.reload();
-        } catch (error) { result.textContent = error.message; }
+          return;
+        }
+        progressWrap.hidden = true;
+        const uploaded = files.length - failures.length;
+        result.textContent = uploaded > 0
+          ? `${uploaded} of ${files.length} uploaded. Failed: ${failures.join('; ')}`
+          : `Upload failed: ${failures.join('; ')}`;
       });
+
+      document.getElementById('scan-form').addEventListener('submit', async event => {
+        event.preventDefault();
+        const scanResult = document.getElementById('scan-result');
+        const collection = new FormData(event.currentTarget).get('collection').trim();
+        const button = event.currentTarget.querySelector('button[type="submit"]');
+        button.disabled = true;
+        scanResult.classList.remove('is-error');
+        scanResult.textContent = 'Scanning…';
+        try {
+          const url = collection
+            ? `manager/scan?collection_id=${encodeURIComponent(collection)}`
+            : 'manager/scan';
+          await act(url, {method: 'POST'});
+          scanResult.textContent = 'Scan queued. Reloading shortly…';
+          setTimeout(() => location.reload(), 1500);
+        } catch (error) {
+          scanResult.classList.add('is-error');
+          scanResult.textContent = error.message;
+          button.disabled = false;
+        }
+      });
+
       document.querySelectorAll('[data-action]').forEach(button => button.addEventListener('click', async () => {
         const id = button.closest('[data-clip-id]').dataset.clipId;
         const action = button.dataset.action;

@@ -54,6 +54,12 @@ main > p {
   margin: 0 0 1.75rem;
 }
 
+section > p:first-of-type {
+  color: var(--text-muted);
+  margin: 0 0 1rem;
+  font-size: 0.9rem;
+}
+
 section {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -62,20 +68,24 @@ section {
   margin-bottom: 1.75rem;
 }
 
-#upload-form {
+#upload-form,
+#scan-form {
   display: flex;
   flex-wrap: wrap;
   align-items: flex-end;
   gap: 1rem;
 }
 
-#upload-form label {
+#upload-form label,
+#scan-form label {
   display: flex;
   flex-direction: column;
   gap: 0.35rem;
   font-size: 0.85rem;
   color: var(--text-muted);
 }
+
+#scan-form input { min-width: 16rem; }
 
 input[type="text"],
 input:not([type]),
@@ -111,13 +121,48 @@ button:active { filter: brightness(0.9); }
   border-color: transparent;
 }
 
-#result {
+.upload-progress { margin-top: 1rem; }
+
+.upload-progress-bar {
+  height: 0.5rem;
+  border-radius: 999px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.upload-progress-fill {
+  height: 100%;
+  width: 0%;
+  background: var(--accent);
+  transition: width 0.15s ease;
+}
+
+.upload-progress-label {
+  margin: 0.5rem 0 0;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+#result,
+#scan-result {
   min-height: 1.2rem;
   margin: 0.85rem 0 0;
   font-size: 0.9rem;
 }
 
 #result:not(:empty) {
+  color: var(--danger);
+  background: var(--danger-bg);
+  border-radius: 0.35rem;
+  padding: 0.5rem 0.75rem;
+}
+
+#scan-result:not(:empty) {
+  color: var(--text-muted);
+}
+
+#scan-result.is-error {
   color: var(--danger);
   background: var(--danger-bg);
   border-radius: 0.35rem;
