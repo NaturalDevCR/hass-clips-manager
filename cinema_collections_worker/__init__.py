@@ -1,0 +1,1 @@
+"""Cinema Collections worker package."""

@@ -72,3 +72,37 @@ roots are produced by the other implementation tasks.
 - The repository URL in `repository.yaml` is the approved project placeholder
   and should be updated if the canonical GitHub organization changes.
 
+## Review fixes
+
+Status: DONE
+
+- Added minimal importable roots at `cinema_collections_worker` and
+  `custom_components/cinema_collections`; each contains only a package
+  docstring and no runtime behavior.
+- Updated the quality workflow to install `uv` and run `uv sync --all-groups`,
+  covering the declared dev, worker, and Home Assistant dependency groups.
+- Resolved the canonical remote with `git remote -v` and updated
+  `repository.yaml` to `https://github.com/NaturalDevCR/hass-clips-manager`.
+
+### Verification after review fixes
+
+```text
+uv run --group dev pytest tests/test_repository_metadata.py -v
+3 passed in 0.00s
+
+uv run --group dev ruff check .
+All checks passed!
+
+uv run --group dev ruff format --check .
+7 files already formatted
+
+uv run --group dev pyright
+0 errors, 0 warnings, 0 informations
+
+git diff --check
+(no output)
+```
+
+Self-review confirms both package roots now exist and Pyright checks those
+concrete directories. The worker workflow still intentionally depends on the
+Dockerfile supplied by the worker implementation task.
