@@ -70,6 +70,7 @@ def test_runtime_openapi_preserves_contract_security_bodies_and_responses(tmp_pa
             if method == "parameters":
                 continue
             runtime_operation = runtime["paths"][path][method]
+            assert runtime_operation["operationId"] == contract_operation["operationId"]
             assert runtime_operation["security"] == contract_operation["security"]
             if method in {"post", "patch"}:
                 headers = [

@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Annotated, Any, Literal, cast
 from uuid import UUID
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response, status
+from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query, Request, Response, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
@@ -50,10 +50,9 @@ API_VERSION = "1.0.0"
 MIN_CLIENT_VERSION = "1.0.0"
 MAX_CLIENT_VERSION = "1.x"
 _ACTOR = "worker-api"
-_CONTRACT_PATH = Path(__file__).parents[3] / "contract" / "openapi-v1.yaml"
 
 
-class ErrorPayload(BaseModel):
+class Error(BaseModel):
     """Stable error document declared in the public OpenAPI contract."""
 
     model_config = ConfigDict(extra="forbid")
@@ -65,21 +64,13 @@ class ErrorPayload(BaseModel):
     request_id: str
 
 
-class HealthPayload(BaseModel):
+class Health(BaseModel):
     status: Literal["ok"] = "ok"
     component: Literal["cinema-collections-worker"] = "cinema-collections-worker"
     worker_version: str = WORKER_VERSION
     api_version: str = API_VERSION
     min_client_version: str = MIN_CLIENT_VERSION
     max_client_version: str = MAX_CLIENT_VERSION
-
-
-class StatusPayload(BaseModel):
-    queue_depth: int = Field(ge=0)
-    current_job: dict[str, Any] | None = None
-    storage: dict[str, Any]
-    scans: dict[str, Any]
-    latest_errors: list[ErrorPayload]
 
 
 class Page(BaseModel):
@@ -117,14 +108,74 @@ class CompileRequest(BaseModel):
         )
 
 
-class ApiJob(BaseModel):
+DEFAULT_SCAN_REQUEST = ScanRequest()
+
+
+class Collection(CollectionRecord):
+    """Public collection representation."""
+
+
+class Profile(ProfileRecord):
+    """Public profile representation."""
+
+
+class Clip(ClipRecord):
+    """Public catalog clip representation."""
+
+
+class Progress(BaseModel):
+    stage: str
+    percent: float = Field(ge=0, le=100)
+    eta_seconds: float | None = Field(default=None, ge=0)
+
+
+class Job(BaseModel):
     id: str
     kind: Literal["scan", "compile", "cleanup"]
     state: Literal["queued", "running", "succeeded", "failed", "cancelled"]
-    progress: dict[str, Any]
+    progress: Progress
     created_at: datetime
     finished_at: datetime | None = None
-    error: ErrorPayload | None = None
+    error: Error | None = None
+
+
+class CancelledJob(Job):
+    """Public job representation returned after cancellation."""
+
+
+class Status(BaseModel):
+    queue_depth: int = Field(ge=0)
+    current_job: Job | None = None
+    storage: dict[str, Any]
+    scans: dict[str, Any]
+    latest_errors: list[Error]
+
+
+class CollectionsPage(Page):
+    items: list[Collection]
+
+
+class ProfilesPage(Page):
+    items: list[Profile]
+
+
+class ClipsPage(Page):
+    items: list[Clip]
+
+
+class JobsPage(Page):
+    items: list[Job]
+
+
+class LogEntry(BaseModel):
+    timestamp: datetime
+    level: str
+    message: str
+    job_id: UUID | None = None
+
+
+class LogsPage(Page):
+    items: list[LogEntry]
 
 
 Auth = Annotated[None, Depends(require_bearer_token)]
@@ -147,7 +198,7 @@ def _error(
     details: Any | None = None,
     retryable: bool = False,
 ) -> JSONResponse:
-    payload = ErrorPayload(
+    payload = Error(
         code=code,
         message=message,
         details=details,
@@ -167,9 +218,9 @@ def _exception_response(request: Request, exc: Exception) -> JSONResponse:
     return _error(request, 503, "unavailable", "worker dependency is unavailable", retryable=True)
 
 
-def _serialize_job(job: JobRecord, request: Request) -> ApiJob:
+def _serialize_job(job: JobRecord, request: Request) -> Job:
     error = (
-        ErrorPayload(
+        Error(
             code="job_failed",
             message=job.error,
             retryable=False,
@@ -178,21 +229,21 @@ def _serialize_job(job: JobRecord, request: Request) -> ApiJob:
         if job.error
         else None
     )
-    return ApiJob(
+    return Job(
         id=job.id,
         kind=cast(
             Literal["scan", "compile", "cleanup"],
             job.kind if job.kind in {"scan", "compile", "cleanup"} else "compile",
         ),
         state=job.state.value,
-        progress=job.progress.model_dump(mode="json"),
+        progress=Progress.model_validate(job.progress.model_dump(mode="json")),
         created_at=job.created_at,
         finished_at=job.finished_at,
         error=error,
     )
 
 
-def _job_from_database(queue: PersistentJobQueue, job_id: str, request: Request) -> ApiJob:
+def _job_from_database(queue: PersistentJobQueue, job_id: str, request: Request) -> Job:
     return _serialize_job(queue.get(job_id), request)
 
 
@@ -229,6 +280,17 @@ MutationPreconditions = [
     Depends(require_idempotency_key),
     Depends(_require_supported_client),
 ]
+
+RouteResponses = dict[int | str, dict[str, Any]]
+_UNAUTHORIZED_RESPONSE: RouteResponses = {401: {"model": Error}}
+_MUTATION_RESPONSES: RouteResponses = {
+    401: {"model": Error},
+    409: {"model": Error},
+    422: {"model": Error},
+    429: {"model": Error},
+    503: {"model": Error},
+}
+_NOT_FOUND_RESPONSES: RouteResponses = {401: {"model": Error}, 404: {"model": Error}}
 
 
 def _idempotency_fingerprint(operation: str, payload: Any) -> str:
@@ -326,15 +388,6 @@ def create_app(settings: WorkerSettings) -> FastAPI:
         database, resolver, disk_reserve_bytes=settings.disk_reserve_bytes, queue=queue
     )
 
-    def contract_openapi() -> dict[str, Any]:
-        """Expose the versioned, reviewed contract rather than inferred internals."""
-
-        if app.openapi_schema is None:
-            app.openapi_schema = json.loads(_CONTRACT_PATH.read_text(encoding="utf-8"))
-        return cast(dict[str, Any], app.openapi_schema)
-
-    app.openapi = contract_openapi  # type: ignore[method-assign]
-
     @app.middleware("http")
     async def assign_request_id(request: Request, call_next: Callable[[Request], Any]) -> Response:
         request.state.request_id = str(uuid.uuid4())
@@ -384,23 +437,27 @@ def create_app(settings: WorkerSettings) -> FastAPI:
         return _exception_response(request, exc)
 
     @app.get(
-        "/api/v1/health", response_model=HealthPayload, dependencies=[Depends(require_bearer_token)]
+        "/api/v1/health",
+        response_model=Health,
+        dependencies=[Depends(require_bearer_token)],
+        responses=_UNAUTHORIZED_RESPONSE,
+        operation_id="getHealth",
     )
-    def get_health() -> HealthPayload:
-        return HealthPayload()
+    def get_health() -> Health:
+        return Health()
 
     @app.get(
-        "/api/v1/status", response_model=StatusPayload, dependencies=[Depends(require_bearer_token)]
+        "/api/v1/status",
+        response_model=Status,
+        dependencies=[Depends(require_bearer_token)],
+        responses=_UNAUTHORIZED_RESPONSE,
+        operation_id="getStatus",
     )
-    def get_status(request: Request) -> StatusPayload:
+    def get_status(request: Request) -> Status:
         running = database.connection.execute(
             "SELECT id FROM jobs WHERE state='running' LIMIT 1"
         ).fetchone()
-        current = (
-            _job_from_database(queue, running["id"], request).model_dump(mode="json")
-            if running
-            else None
-        )
+        current = _job_from_database(queue, running["id"], request) if running else None
         queued = database.connection.execute(
             "SELECT count(*) FROM jobs WHERE state='queued'"
         ).fetchone()[0]
@@ -408,32 +465,44 @@ def create_app(settings: WorkerSettings) -> FastAPI:
         for key, root in resolver.roots.items():
             with suppress(OSError):
                 storage[key.value] = {"path": str(root), "free_bytes": shutil.disk_usage(root).free}
-        return StatusPayload(
+        return Status(
             queue_depth=queued, current_job=current, storage=storage, scans={}, latest_errors=[]
         )
 
     @app.get(
-        "/api/v1/collections", response_model=Page, dependencies=[Depends(require_bearer_token)]
+        "/api/v1/collections",
+        response_model=CollectionsPage,
+        dependencies=[Depends(require_bearer_token)],
+        responses=_UNAUTHORIZED_RESPONSE,
+        operation_id="listCollections",
     )
-    def list_collections(page: PageNumber = 1, page_size: PageSize = 25) -> Page:
+    def list_collections(page: PageNumber = 1, page_size: PageSize = 25) -> CollectionsPage:
         rows = database.connection.execute("SELECT id FROM collections ORDER BY id").fetchall()
-        return _page(
-            [collections.get(row["id"]).model_dump(mode="json") for row in rows], page, page_size
+        return CollectionsPage.model_validate(
+            _page(
+                [collections.get(row["id"]).model_dump(mode="json") for row in rows],
+                page,
+                page_size,
+            ).model_dump()
         )
 
     @app.post(
         "/api/v1/collections",
-        response_model=CollectionRecord,
+        response_model=Collection,
         status_code=201,
         dependencies=MutationPreconditions,
+        responses=_MUTATION_RESPONSES,
+        operation_id="createCollection",
     )
     def create_collection(payload: CollectionCreate, key: IdempotencyKey) -> CollectionRecord:
         return collections.create(payload, actor=_ACTOR, request_id=key)
 
     @app.patch(
         "/api/v1/collections/{collection_id}",
-        response_model=CollectionRecord,
+        response_model=Collection,
         dependencies=MutationPreconditions,
+        responses=_MUTATION_RESPONSES,
+        operation_id="patchCollection",
     )
     def patch_collection(
         collection_id: str,
@@ -445,26 +514,38 @@ def create_app(settings: WorkerSettings) -> FastAPI:
             raise ValueError("patch must not be empty")
         return collections.patch(collection_id, revision, payload, actor=_ACTOR, request_id=key)
 
-    @app.get("/api/v1/profiles", response_model=Page, dependencies=[Depends(require_bearer_token)])
-    def list_profiles(page: PageNumber = 1, page_size: PageSize = 25) -> Page:
+    @app.get(
+        "/api/v1/profiles",
+        response_model=ProfilesPage,
+        dependencies=[Depends(require_bearer_token)],
+        responses=_UNAUTHORIZED_RESPONSE,
+        operation_id="listProfiles",
+    )
+    def list_profiles(page: PageNumber = 1, page_size: PageSize = 25) -> ProfilesPage:
         rows = database.connection.execute("SELECT id FROM profiles ORDER BY id").fetchall()
-        return _page(
-            [profiles.get(row["id"]).model_dump(mode="json") for row in rows], page, page_size
+        return ProfilesPage.model_validate(
+            _page(
+                [profiles.get(row["id"]).model_dump(mode="json") for row in rows], page, page_size
+            ).model_dump()
         )
 
     @app.post(
         "/api/v1/profiles",
-        response_model=ProfileRecord,
+        response_model=Profile,
         status_code=201,
         dependencies=MutationPreconditions,
+        responses=_MUTATION_RESPONSES,
+        operation_id="createProfile",
     )
     def create_profile(payload: ProfileCreate, key: IdempotencyKey) -> ProfileRecord:
         return profiles.create(payload, actor=_ACTOR, request_id=key)
 
     @app.patch(
         "/api/v1/profiles/{profile_id}",
-        response_model=ProfileRecord,
+        response_model=Profile,
         dependencies=MutationPreconditions,
+        responses=_MUTATION_RESPONSES,
+        operation_id="patchProfile",
     )
     def patch_profile(
         profile_id: str,
@@ -476,17 +557,29 @@ def create_app(settings: WorkerSettings) -> FastAPI:
             raise ValueError("patch must not be empty")
         return profiles.patch(profile_id, revision, payload, actor=_ACTOR, request_id=key)
 
-    @app.get("/api/v1/clips", response_model=Page, dependencies=[Depends(require_bearer_token)])
-    def list_clips(page: PageNumber = 1, page_size: PageSize = 25) -> Page:
+    @app.get(
+        "/api/v1/clips",
+        response_model=ClipsPage,
+        dependencies=[Depends(require_bearer_token)],
+        responses=_UNAUTHORIZED_RESPONSE,
+        operation_id="listClips",
+    )
+    def list_clips(page: PageNumber = 1, page_size: PageSize = 25) -> ClipsPage:
         rows = database.connection.execute(
             "SELECT * FROM clips WHERE state <> 'deleted' ORDER BY id"
         ).fetchall()
-        return _page([_clip_from_row(row).model_dump(mode="json") for row in rows], page, page_size)
+        return ClipsPage.model_validate(
+            _page(
+                [_clip_from_row(row).model_dump(mode="json") for row in rows], page, page_size
+            ).model_dump()
+        )
 
     @app.get(
         "/api/v1/clips/{clip_id}",
-        response_model=ClipRecord,
+        response_model=Clip,
         dependencies=[Depends(require_bearer_token)],
+        responses=_NOT_FOUND_RESPONSES,
+        operation_id="getClip",
     )
     def get_clip(clip_id: str) -> ClipRecord:
         row = database.connection.execute(
@@ -497,12 +590,19 @@ def create_app(settings: WorkerSettings) -> FastAPI:
         return _clip_from_row(row)
 
     @app.post(
-        "/api/v1/scan", response_model=ApiJob, status_code=202, dependencies=MutationPreconditions
+        "/api/v1/scan",
+        response_model=Job,
+        status_code=202,
+        dependencies=MutationPreconditions,
+        responses=_MUTATION_RESPONSES,
+        operation_id="startScan",
     )
     def start_scan(
-        request: Request, key: IdempotencyKey, payload: ScanRequest | None = None
-    ) -> ApiJob:
-        body = (payload or ScanRequest()).model_dump(mode="json")
+        request: Request,
+        key: IdempotencyKey,
+        payload: Annotated[ScanRequest, Body()] = DEFAULT_SCAN_REQUEST,
+    ) -> Job:
+        body = payload.model_dump(mode="json")
         job = _replay_or_remember_job(
             database,
             queue,
@@ -515,11 +615,13 @@ def create_app(settings: WorkerSettings) -> FastAPI:
 
     @app.post(
         "/api/v1/compile",
-        response_model=ApiJob,
+        response_model=Job,
         status_code=202,
         dependencies=MutationPreconditions,
+        responses=_MUTATION_RESPONSES,
+        operation_id="startCompile",
     )
-    def start_compile(request: Request, payload: CompileRequest, key: IdempotencyKey) -> ApiJob:
+    def start_compile(request: Request, payload: CompileRequest, key: IdempotencyKey) -> Job:
         body = payload.model_dump(mode="json")
         internal_request = payload.to_internal()
 
@@ -534,27 +636,46 @@ def create_app(settings: WorkerSettings) -> FastAPI:
         )
         return _serialize_job(job, request)
 
-    @app.get("/api/v1/jobs", response_model=Page, dependencies=[Depends(require_bearer_token)])
-    def list_jobs(request: Request, page: PageNumber = 1, page_size: PageSize = 25) -> Page:
+    @app.get(
+        "/api/v1/jobs",
+        response_model=JobsPage,
+        dependencies=[Depends(require_bearer_token)],
+        responses=_UNAUTHORIZED_RESPONSE,
+        operation_id="listJobs",
+    )
+    def list_jobs(request: Request, page: PageNumber = 1, page_size: PageSize = 25) -> JobsPage:
         rows = database.connection.execute(
             "SELECT id FROM jobs ORDER BY created_at DESC, id DESC"
         ).fetchall()
-        return _page(
-            [_job_from_database(queue, row["id"], request).model_dump(mode="json") for row in rows],
-            page,
-            page_size,
+        return JobsPage.model_validate(
+            _page(
+                [
+                    _job_from_database(queue, row["id"], request).model_dump(mode="json")
+                    for row in rows
+                ],
+                page,
+                page_size,
+            ).model_dump()
         )
 
     @app.get(
-        "/api/v1/jobs/{job_id}", response_model=ApiJob, dependencies=[Depends(require_bearer_token)]
+        "/api/v1/jobs/{job_id}",
+        response_model=Job,
+        dependencies=[Depends(require_bearer_token)],
+        responses=_NOT_FOUND_RESPONSES,
+        operation_id="getJob",
     )
-    def get_job(request: Request, job_id: str) -> ApiJob:
+    def get_job(request: Request, job_id: str) -> Job:
         return _job_from_database(queue, job_id, request)
 
     @app.post(
-        "/api/v1/jobs/{job_id}/cancel", response_model=ApiJob, dependencies=MutationPreconditions
+        "/api/v1/jobs/{job_id}/cancel",
+        response_model=CancelledJob,
+        dependencies=MutationPreconditions,
+        responses=_MUTATION_RESPONSES,
+        operation_id="cancelJob",
     )
-    def cancel_job(request: Request, job_id: str, key: IdempotencyKey) -> ApiJob:
+    def cancel_job(request: Request, job_id: str, key: IdempotencyKey) -> CancelledJob:
         job = _replay_or_remember_job(
             database,
             queue,
@@ -563,19 +684,27 @@ def create_app(settings: WorkerSettings) -> FastAPI:
             payload={"job_id": job_id},
             create=lambda: app.state.jobs.cancel(job_id),
         )
-        return _serialize_job(job, request)
+        return CancelledJob.model_validate(_serialize_job(job, request).model_dump(mode="json"))
 
-    @app.get("/api/v1/logs", response_model=Page, dependencies=[Depends(require_bearer_token)])
-    def list_logs(page: PageNumber = 1, page_size: PageSize = 25) -> Page:
-        return _page([], page, page_size)
+    @app.get(
+        "/api/v1/logs",
+        response_model=LogsPage,
+        dependencies=[Depends(require_bearer_token)],
+        responses=_UNAUTHORIZED_RESPONSE,
+        operation_id="listLogs",
+    )
+    def list_logs(page: PageNumber = 1, page_size: PageSize = 25) -> LogsPage:
+        return LogsPage.model_validate(_page([], page, page_size).model_dump())
 
     @app.post(
         "/api/v1/cleanup-temporaries",
-        response_model=ApiJob,
+        response_model=Job,
         status_code=202,
         dependencies=MutationPreconditions,
+        responses=_MUTATION_RESPONSES,
+        operation_id="cleanupTemporaries",
     )
-    def cleanup_temporaries(request: Request, key: IdempotencyKey) -> ApiJob:
+    def cleanup_temporaries(request: Request, key: IdempotencyKey) -> Job:
         job = _replay_or_remember_job(
             database,
             queue,

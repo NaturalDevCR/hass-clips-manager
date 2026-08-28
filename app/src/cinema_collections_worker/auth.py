@@ -28,9 +28,7 @@ def require_bearer_token(
 
 def require_idempotency_key(
     request: Request,
-    value: Annotated[
-        str | None, Header(alias="Idempotency-Key", min_length=1, max_length=128)
-    ] = None,
+    value: Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=128)],
 ) -> str:
     """Return a bounded idempotency key for every state-changing request."""
 
