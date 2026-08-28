@@ -137,10 +137,11 @@ class OutputSettings(ProfileModel):
 
     @model_validator(mode="after")
     def validate_extension(self) -> OutputSettings:
-        if (
-            not re.fullmatch(r"[A-Za-z0-9]{1,8}", self.extension)
-            or self.extension.lower() not in {"mp4", "mkv", "webm"}
-        ):
+        if not re.fullmatch(r"[A-Za-z0-9]{1,8}", self.extension) or self.extension.lower() not in {
+            "mp4",
+            "mkv",
+            "webm",
+        }:
             raise ValueError("output extension is not safe or supported")
         return self
 
@@ -159,10 +160,12 @@ class ProcessingProfile(ProfileModel):
     video: VideoSettings = VideoSettings()
     audio: AudioSettings = AudioSettings()
     loudness: LoudnessMode = TwoPassLoudness(integrated_lufs=-18, true_peak_dbtp=-1.5, lra_lu=11)
-    transitions: list[TransitionSettings] = Field(default_factory=lambda: [
-        FadeTransition(duration_seconds=1, from_segment="intro", to_segment="clip"),
-        FadeTransition(duration_seconds=1, from_segment="clip", to_segment="outro"),
-    ])
+    transitions: list[TransitionSettings] = Field(
+        default_factory=lambda: [
+            FadeTransition(duration_seconds=1, from_segment="intro", to_segment="clip"),
+            FadeTransition(duration_seconds=1, from_segment="clip", to_segment="outro"),
+        ]
+    )
     fade_in_seconds: float = Field(default=1, ge=0, le=60)
     fade_out_seconds: float = Field(default=1.5, ge=0, le=60)
     output: OutputSettings = OutputSettings()
@@ -188,8 +191,7 @@ class ProcessingProfile(ProfileModel):
             raise ValueError("fade durations exceed the supported timeline")
         if (
             self.minimum_segment_duration_seconds is not None
-            and self.fade_in_seconds + self.fade_out_seconds
-            > self.minimum_segment_duration_seconds
+            and self.fade_in_seconds + self.fade_out_seconds > self.minimum_segment_duration_seconds
         ):
             raise ValueError("fade durations exceed the minimum segment duration")
         if any(t.type != "fade" for t in self.transitions):

@@ -15,9 +15,7 @@ def test_invalid_dimensions_are_rejected():
 def test_crf_and_bitrate_conflict_is_rejected():
     with pytest.raises(ValueError):
         validate_profile(
-            ProcessingProfile(
-                video={"quality": {"mode": "crf", "crf": 23, "bitrate_kbps": 1000}}
-            )
+            ProcessingProfile(video={"quality": {"mode": "crf", "crf": 23, "bitrate_kbps": 1000}})
         )
 
 
@@ -61,8 +59,7 @@ def test_asset_references_reject_absolute_and_traversal_paths(reference):
 
 def test_asset_reference_accepts_safe_relative_path():
     assert (
-        ProcessingProfile(intro_reference="intros/intro.mp4").intro_reference
-        == "intros/intro.mp4"
+        ProcessingProfile(intro_reference="intros/intro.mp4").intro_reference == "intros/intro.mp4"
     )
 
 

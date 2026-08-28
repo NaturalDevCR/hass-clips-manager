@@ -113,11 +113,7 @@ def test_openapi_document_has_versioned_routes_and_bearer_auth() -> None:
 
 def test_mutations_require_idempotency_key_and_standard_errors() -> None:
     schema = load_schema()
-    mutations = {
-        (method, path)
-        for method, path in EXPECTED_ROUTES
-        if method in {"POST", "PATCH"}
-    }
+    mutations = {(method, path) for method, path in EXPECTED_ROUTES if method in {"POST", "PATCH"}}
     for method, path in mutations:
         operation = schema["paths"][path][method.lower()]
         parameters = operation["parameters"]

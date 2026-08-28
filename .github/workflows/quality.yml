@@ -14,7 +14,4 @@ jobs:
           python-version: "3.13"
       - run: python -m pip install --upgrade pip uv
       - run: uv sync --all-groups
-      - run: uv run ruff format --check .
-      - run: uv run ruff check .
-      - run: uv run pyright
-      - run: uv run pytest
+      - run: scripts/verify.sh

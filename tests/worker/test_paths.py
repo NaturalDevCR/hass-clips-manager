@@ -1,7 +1,6 @@
 from pathlib import Path
 
 import pytest
-
 from cinema_collections_worker.paths import (
     PathSafetyError,
     RootKey,

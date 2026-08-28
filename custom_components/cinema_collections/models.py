@@ -68,6 +68,38 @@ class WorkerClip:
 
 
 @dataclass(frozen=True, slots=True)
+class WorkerJob:
+    """The safe public job progress fields exposed by the Worker queue."""
+
+    id: str
+    kind: str
+    state: str
+    progress_stage: str
+    progress_percent: float
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> WorkerJob:
+        """Parse the public job fields needed for integration observability."""
+        progress = _required_mapping(payload.get("progress"), "progress")
+        percent = progress.get("percent")
+        if (
+            isinstance(percent, bool)
+            or not isinstance(percent, (int, float))
+            or not 0 <= percent <= 100
+        ):
+            raise WorkerContractError(
+                "Worker job response field 'progress.percent' must be a percentage"
+            )
+        return cls(
+            id=_required_string(payload, "id"),
+            kind=_required_string(payload, "kind"),
+            state=_required_string(payload, "state"),
+            progress_stage=_required_string(progress, "stage"),
+            progress_percent=float(percent),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class WorkerHealth:
     """Worker liveness and client-compatibility information."""
 

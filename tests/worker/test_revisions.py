@@ -48,15 +48,24 @@ def test_nested_audit_secrets_are_redacted(tmp_path):
     repo = CollectionRepository(db)
     repo.create(
         CollectionCreate(
-            id="films", name="Films", source_directory="films", processing_profile_id="p",
+            id="films",
+            name="Films",
+            source_directory="films",
+            processing_profile_id="p",
             worker_secret="top-secret",
-        ), actor="ha", request_id="create",
+        ),
+        actor="ha",
+        request_id="create",
     )
     repo.patch(
-        "films", 1,
-        {"notes": "ok"}, actor="ha", request_id="nested",
+        "films",
+        1,
+        {"notes": "ok"},
+        actor="ha",
+        request_id="nested",
     )
     # Exercise the redactor directly through the audit payload helper.
     from cinema_collections_worker.repositories import _summary
+
     rendered = _summary({"outer": [{"password": "bad", "headers": {"authorization": "bad"}}]})
     assert "bad" not in rendered

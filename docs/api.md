@@ -53,6 +53,12 @@ the job failed or retryable. It never publishes a partial output. Clients
 should use a request timeout long enough to receive the `202` acknowledgement,
 then poll the job instead of holding an HTTP request open.
 
+The integration reads health, status, clips, and jobs solely to report
+availability and return an eligible media-source URI from
+`select_next_clip`. It does not call Home Assistant playback, media-player, or
+device-control services; the calling automation decides whether to use that
+response.
+
 ## Cancellation and disconnects
 
 `POST /api/v1/jobs/{job_id}/cancel` requests cooperative cancellation and returns the
