@@ -1,0 +1,12 @@
+{
+  "domain": "cinema_collections",
+  "name": "Cinema Collections",
+  "codeowners": ["@cinema-collections"],
+  "config_flow": true,
+  "documentation": "https://github.com/cinema-collections/hass-clips-manager",
+  "integration_type": "service",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/cinema-collections/hass-clips-manager/issues",
+  "requirements": [],
+  "version": "0.1.0"
+}
