@@ -113,6 +113,15 @@ class PersistentJobQueue:
             )
         return job
 
+    def has_succeeded(self, fingerprint: str) -> bool:
+        return (
+            self.db.connection.execute(
+                "SELECT 1 FROM jobs WHERE fingerprint=? AND state='succeeded' LIMIT 1",
+                (fingerprint,),
+            ).fetchone()
+            is not None
+        )
+
     def claim_next(self) -> JobRecord | None:
         """Claim one queued job only when no job is already running."""
 

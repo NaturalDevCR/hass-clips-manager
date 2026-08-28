@@ -104,3 +104,17 @@ def test_enqueue_rejects_when_available_disk_space_is_below_reserve(tmp_path, mo
 
     with pytest.raises(ValueError, match="disk space"):
         service.enqueue_compile(CompileRequest(collection_id="films"))
+
+
+def test_enqueue_accounts_for_total_estimated_bytes_across_clips(tmp_path, monkeypatch):
+    db, _resolver, service = _configured_service(tmp_path)
+    with db.connection:
+        db.connection.execute(
+            "INSERT INTO clips(id,collection_id,state,relative_source_path,relative_output_path,duration_seconds,output_available,metadata,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
+            ("00000000-0000-0000-0000-000000000002", "films", "discovered", "films/two.mp4", "films/two.mp4", 10, 0, json.dumps({"source_fingerprint": "source-v2", "size_bytes": 7}), "now"),
+        )
+    monkeypatch.setattr(service, "available_disk_bytes", lambda _path: 15)
+    service.disk_reserve_bytes = 2
+
+    with pytest.raises(ValueError, match="disk space"):
+        service.enqueue_compile(CompileRequest(collection_id="films"))

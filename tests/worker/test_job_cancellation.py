@@ -1,6 +1,7 @@
 # ruff: noqa: E501
 import signal
 
+import pytest
 from cinema_collections_worker.jobs import CompileRequest, JobState, JobWorker
 from cinema_collections_worker.probe import MediaProbeResult
 from test_queue import _configured_service
@@ -74,3 +75,15 @@ def test_timeout_terminates_process_and_stops_after_retry_cap(tmp_path, monkeypa
     assert result is not None and result.job.state is JobState.FAILED
     assert not result.retry_scheduled
     assert killed == [(5151, signal.SIGTERM)]
+
+
+def test_cleanup_rejects_non_uuid_or_out_of_root_temporary_directory(tmp_path):
+    db, resolver, _service = _configured_service(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    worker = JobWorker(db, resolver)
+
+    with pytest.raises(ValueError, match="root-contained UUID"):
+        worker._cleanup(resolver.roots["temp"] / "../outside")
+
+    assert outside.exists()

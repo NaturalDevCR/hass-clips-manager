@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -39,13 +40,29 @@ class FfmpegCommandBuilder:
         return ",".join(items)
 
     @staticmethod
-    def _loudnorm(profile: ProcessingProfile) -> str | None:
+    def _loudnorm(
+        profile: ProcessingProfile, measured: Mapping[str, float] | None = None
+    ) -> str | None:
         if profile.loudness.mode == "disabled":
             return None
-        return (
+        filter_text = (
             f"loudnorm=I={profile.loudness.integrated_lufs:g}:"
             f"TP={profile.loudness.true_peak_dbtp:g}:LRA={profile.loudness.lra_lu:g}"
         )
+        if measured:
+            fields = {
+                "input_i": "measured_I",
+                "input_tp": "measured_TP",
+                "input_lra": "measured_LRA",
+                "input_thresh": "measured_thresh",
+                "target_offset": "offset",
+            }
+            filter_text += "".join(
+                f":{output}={measured[input_name]:g}"
+                for input_name, output in fields.items()
+                if input_name in measured
+            )
+        return filter_text
 
     def build_segment_loudness_analysis(self, job: JobRecord) -> list[str]:
         profile = validate_profile(ProcessingProfile.model_validate(job.profile_settings))
@@ -70,7 +87,9 @@ class FfmpegCommandBuilder:
 
         return self.build_segment_loudness_analysis(job)
 
-    def build(self, job: JobRecord) -> list[str]:
+    def build(
+        self, job: JobRecord, measured_loudness: Mapping[str, float] | None = None
+    ) -> list[str]:
         profile = validate_profile(ProcessingProfile.model_validate(job.profile_settings))
         if job.source_path is None or job.temporary_output_path is None:
             raise ValueError("job paths must be resolved before building FFmpeg arguments")
@@ -87,7 +106,7 @@ class FfmpegCommandBuilder:
         inputs: list[tuple[str, Path]] = [("clip", job.source_path)]
         if job.intro_path is not None:
             command.extend(["-i", str(job.intro_path)])
-            inputs.insert(0, ("intro", job.intro_path))
+            inputs.append(("intro", job.intro_path))
         if job.outro_path is not None:
             command.extend(["-i", str(job.outro_path)])
             inputs.append(("outro", job.outro_path))
@@ -109,14 +128,19 @@ class FfmpegCommandBuilder:
         video_label, audio_label = "v_clip", "a_clip"
         transition = profile.transitions[0].duration_seconds if profile.transitions else 0.0
         if job.intro_path is not None:
+            intro_offset = max(0.0, job.intro_duration_seconds - transition)
             graph.append(
-                f"[v_intro][{video_label}]xfade=transition=fade:duration={transition:g}:offset=0[v_intro_clip]"
+                f"[v_intro][{video_label}]xfade=transition=fade:duration={transition:g}:offset={intro_offset:g}[v_intro_clip]"
             )
             graph.append(f"[a_intro][{audio_label}]acrossfade=d={transition:g}[a_intro_clip]")
             video_label, audio_label = "v_intro_clip", "a_intro_clip"
         if job.outro_path is not None:
+            preceding_duration = job.duration_seconds
+            if job.intro_path is not None:
+                preceding_duration += job.intro_duration_seconds - transition
+            outro_offset = max(0.0, preceding_duration - transition)
             graph.append(
-                f"[{video_label}][v_outro]xfade=transition=fade:duration={transition:g}:offset=0[v_final_transition]"
+                f"[{video_label}][v_outro]xfade=transition=fade:duration={transition:g}:offset={outro_offset:g}[v_final_transition]"
             )
             graph.append(f"[{audio_label}][a_outro]acrossfade=d={transition:g}[a_final_transition]")
             video_label, audio_label = "v_final_transition", "a_final_transition"
@@ -125,7 +149,7 @@ class FfmpegCommandBuilder:
             f"[{video_label}]fade=t=in:st=0:d={profile.fade_in_seconds:g},"
             f"fade=t=out:st={fade_out_start:g}:d={profile.fade_out_seconds:g}[v_final]"
         )
-        loudnorm = self._loudnorm(profile)
+        loudnorm = self._loudnorm(profile, measured_loudness)
         final_audio = f"[{audio_label}]"
         if loudnorm is not None and profile.loudness.final_mix_normalization:
             final_audio += loudnorm + ","

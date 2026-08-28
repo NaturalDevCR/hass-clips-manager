@@ -92,6 +92,8 @@ class JobRecord(BaseModel):
     fingerprint: str = ""
     profile_settings: dict[str, Any]
     duration_seconds: float = Field(ge=0)
+    intro_duration_seconds: float = Field(default=0, ge=0)
+    outro_duration_seconds: float = Field(default=0, ge=0)
     has_audio: bool = True
     attempt: int = Field(default=0, ge=0)
     max_attempts: int = Field(default=3, ge=1)
@@ -185,6 +187,7 @@ class JobService:
         except OSError as exc:
             raise ValueError("disk space cannot be checked") from exc
         jobs: list[JobRecord] = []
+        remaining_bytes = available
         for clip in self._eligible_clips(request):
             metadata = json.loads(clip["metadata"] or "{}")
             source_fingerprint = str(metadata.get("source_fingerprint", ""))
@@ -192,8 +195,9 @@ class JobService:
             # historical and may deliberately lag a configuration update.
             profile_fingerprint_value = current_profile_fingerprint
             estimated_bytes = int(metadata.get("size_bytes") or 0)
-            if available - estimated_bytes < self.disk_reserve_bytes:
+            if remaining_bytes - estimated_bytes < self.disk_reserve_bytes:
                 raise ValueError("insufficient disk space for compilation")
+            remaining_bytes -= estimated_bytes
             source_relative = str(clip["relative_source_path"])
             output_relative = str(
                 clip["relative_output_path"] or f"{request.collection_id}/{clip['id']}.mp4"
@@ -215,6 +219,13 @@ class JobService:
                 has_audio=bool(metadata.get("has_audio", True)),
                 max_attempts=request.max_attempts,
             )
+            output = self.resolver.resolve(RootKey.COMPILED.value, output_relative)
+            if (
+                bool(clip["output_available"])
+                and output.is_file()
+                and self.queue.has_succeeded(job.fingerprint)
+            ):
+                continue
             jobs.append(self.queue.enqueue(job))
         return jobs
 
@@ -260,12 +271,21 @@ class JobWorker:
             if profile.outro_reference
             else None
         )
+        def asset_duration(path: Path | None) -> float:
+            if path is None:
+                return 0
+            result = self.probe_client.probe(path)
+            if not result.valid:
+                raise ValueError("referenced asset could not be probed")
+            return result.duration_seconds
         return job.model_copy(
             update={
                 "source_path": source,
                 "temporary_output_path": temporary_output,
                 "intro_path": intro,
                 "outro_path": outro,
+                "intro_duration_seconds": asset_duration(intro),
+                "outro_duration_seconds": asset_duration(outro),
             }
         )
 
@@ -297,6 +317,19 @@ class JobWorker:
         percent = min(99.0, max(0.0, elapsed / duration_seconds * 100))
         eta = max(0.0, duration_seconds - elapsed)
         return JobProgress(stage=JobStage.ENCODING, percent=percent, eta_seconds=eta)
+
+    @staticmethod
+    def _parse_loudnorm(raw: str) -> dict[str, float] | None:
+        start, end = raw.rfind("{"), raw.rfind("}")
+        if start < 0 or end <= start:
+            return None
+        try:
+            payload = json.loads(raw[start : end + 1])
+            keys = ("input_i", "input_tp", "input_lra", "input_thresh", "target_offset")
+            measured = {key: float(payload[key]) for key in keys}
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+            return None
+        return measured
 
     def _cancelled(self, job_id: str) -> bool:
         try:
@@ -363,8 +396,24 @@ class JobWorker:
                 continue
 
     def _cleanup(self, temp_dir: Path) -> None:
-        if temp_dir.exists():
-            shutil.rmtree(temp_dir)
+        root = self.resolver.roots[RootKey.TEMP].resolve(strict=False)
+        candidate = temp_dir.resolve(strict=False)
+        try:
+            candidate.relative_to(root)
+            uuid.UUID(candidate.name)
+        except (ValueError, AttributeError) as exc:
+            raise ValueError("temporary job directory is not a root-contained UUID") from exc
+        if candidate.parent != root:
+            raise ValueError("temporary job directory is not directly under the temp root")
+        if candidate.exists():
+            shutil.rmtree(candidate)
+
+    def _temporary_directory(self, job_id: str) -> Path:
+        try:
+            uuid.UUID(job_id)
+        except ValueError as exc:
+            raise ValueError("job ID must be a UUID for temporary work") from exc
+        return self.resolver.roots[RootKey.TEMP] / job_id
 
     def _publish(self, temporary_output: Path, final_output: Path) -> None:
         compiled_root = self.resolver.roots[RootKey.COMPILED]
@@ -420,13 +469,28 @@ class JobWorker:
         job = self.claim_next()
         if job is None:
             return None
-        temp_dir = self.resolver.roots[RootKey.TEMP] / job.id
+        temp_dir = self._temporary_directory(job.id)
         try:
             temp_dir.mkdir(parents=True, exist_ok=False)
             runtime_job = self._runtime_job(job, temp_dir)
-            timeout = ProcessingProfile.model_validate(job.profile_settings).timeout_seconds
+            profile = ProcessingProfile.model_validate(job.profile_settings)
+            timeout = profile.timeout_seconds
+            measured_loudness: dict[str, float] | None = None
+            if profile.loudness.mode == "two_pass":
+                analysis = self.command_builder.build_segment_loudness_analysis(runtime_job)
+                analysis_ok, analysis_cancelled, analysis_output = self._run_process(
+                    runtime_job, analysis, timeout
+                )
+                if analysis_cancelled:
+                    finished = self._finish(job, JobState.CANCELLED, "cancelled")
+                    return JobRunResult(job=finished)
+                measured_loudness = self._parse_loudnorm(analysis_output)
+                if not analysis_ok or measured_loudness is None:
+                    retry = job.attempt < job.max_attempts
+                    finished = self._finish(job, JobState.FAILED, "loudness analysis failed", retry=retry)
+                    return JobRunResult(job=finished, retry_scheduled=retry)
             successful, cancelled, output = self._run_process(
-                runtime_job, self.command_builder.build(runtime_job), timeout
+                runtime_job, self.command_builder.build(runtime_job, measured_loudness), timeout
             )
             parsed = self._parse_progress(output, job.duration_seconds)
             if parsed is None:
