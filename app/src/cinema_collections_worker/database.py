@@ -16,7 +16,10 @@ class Database:
     def create(cls, url: str) -> Database:
         if url != ":memory:":
             Path(url).parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(url)
+        # FastAPI executes synchronous route handlers in its worker thread
+        # pool.  The Worker owns this one connection and its repositories use
+        # transactional statements, so it must be usable by those handlers.
+        conn = sqlite3.connect(url, check_same_thread=False)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute("PRAGMA journal_mode = WAL")

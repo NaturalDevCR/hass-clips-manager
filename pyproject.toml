@@ -16,7 +16,14 @@ dependencies = []
 packages = ["app/src/cinema_collections_worker"]
 
 [dependency-groups]
-dev = ["pytest>=8.3", "pytest-asyncio>=0.24", "ruff>=0.8", "pyright>=1.1.390", "openapi-spec-validator>=0.7.2"]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.8",
+    "pyright>=1.1.390",
+    "openapi-spec-validator>=0.7.2",
+    "httpx2>=0.28",
+]
 worker = ["fastapi>=0.115", "uvicorn[standard]>=0.32"]
 home-assistant = ["homeassistant>=2024.1"]
 
