@@ -13,14 +13,16 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.util.json import JsonValueType
 
 from .const import (
+    CONF_MEDIA_URI_PREFIX,
     CONF_OVERRIDE_COLLECTION_ID,
     CONF_OVERRIDE_MODE,
+    DEFAULT_MEDIA_URI_PREFIX,
     DOMAIN,
 )
 from .coordinator import CinemaCollectionsCoordinator, override_for_entry, policies_for_entry
 from .history import PlaybackHistoryStore
 from .resolver import CollectionPolicy, OverrideKind, OverrideMode, resolve_active_collection
-from .selection import ClipAvailabilityClient, SelectionService, SelectRequest
+from .selection import ClipAvailabilityClient, SelectionService, SelectRequest, build_media_uri
 
 SERVICE_SELECT_NEXT_CLIP = "select_next_clip"
 SERVICE_RESET_HISTORY = "reset_history"
@@ -174,6 +176,7 @@ async def async_select_next_clip(
     collections: Sequence[CollectionPolicy],
     data: Mapping[str, object],
     override: OverrideMode | None = None,
+    media_uri_prefix: str = DEFAULT_MEDIA_URI_PREFIX,
 ) -> dict[str, JsonValueType]:
     """Select a safe Worker-backed clip and format a Home Assistant response."""
     requested = data.get("collection_id")
@@ -184,7 +187,11 @@ async def async_select_next_clip(
             collections, override or OverrideMode.automatic(), _utc_now()
         )
         collection_id = selected.id
-    response = await SelectionService(history, client).async_select(
+    response = await SelectionService(
+        history,
+        client,
+        media_uri_builder=lambda path: build_media_uri(media_uri_prefix, path),
+    ).async_select(
         SelectRequest(collection_id=collection_id, dry_run=bool(data.get("dry_run", False)))
     )
     return {
@@ -216,6 +223,7 @@ async def async_run_action(
             collections=collections,
             data=data,
             override=override_for_entry(entry),
+            media_uri_prefix=str(entry.data.get(CONF_MEDIA_URI_PREFIX, DEFAULT_MEDIA_URI_PREFIX)),
         )
     if action == SERVICE_RESET_HISTORY or action == "reset_history":
         if runtime.history is None:

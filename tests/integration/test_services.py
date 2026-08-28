@@ -53,7 +53,9 @@ async def test_select_next_clip_returns_home_assistant_media_content_response(ha
         "collection_id": "films",
         "clip_id": "clip-1",
         "relative_output_path": "films/clip-1.mp4",
-        "media_content_id": "media-source://media_source/local/films/clip-1.mp4",
+        "media_content_id": (
+            "media-source://media_source/local/cinema-collections/compiled/films/clip-1.mp4"
+        ),
         "media_content_type": "video",
         "duration_seconds": 9.5,
         "history_reset": False,

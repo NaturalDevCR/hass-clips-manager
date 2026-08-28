@@ -300,9 +300,29 @@ class WorkerApiClient:
         idempotency_key: str,
         extra_headers: Mapping[str, str] | None = None,
     ) -> Mapping[str, Any]:
-        """Perform a single non-retried Worker mutation with mandatory safeguards."""
+        """Retry one idempotent mutation safely with its stable request key."""
         if not idempotency_key:
             raise ValueError("Worker mutation requires an idempotency key")
+        for attempt in range(MAX_REQUEST_ATTEMPTS):
+            try:
+                return await self._async_mutate_once(
+                    method, path, payload, idempotency_key, extra_headers
+                )
+            except (WorkerApiConnectionError, WorkerApiRetryableError):
+                if attempt == MAX_REQUEST_ATTEMPTS - 1:
+                    raise
+                await asyncio.sleep(RETRY_BACKOFF_SECONDS * (2**attempt))
+        raise AssertionError("bounded Worker mutation retry loop must return or raise")
+
+    async def _async_mutate_once(
+        self,
+        method: str,
+        path: str,
+        payload: Mapping[str, object],
+        idempotency_key: str,
+        extra_headers: Mapping[str, str] | None = None,
+    ) -> Mapping[str, Any]:
+        """Perform one mutation attempt; callers retain its idempotency key."""
         headers = {
             "Authorization": f"Bearer {self._token}",
             "Idempotency-Key": idempotency_key,

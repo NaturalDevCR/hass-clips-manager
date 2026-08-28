@@ -49,6 +49,13 @@ class FakeSession:
             raise response
         return response
 
+    def request(self, method: str, url: str, **kwargs: Any) -> FakeResponse:
+        self.calls.append({"method": method, "url": url, **kwargs})
+        response = self.response.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response
+
 
 HEALTH = {
     "status": "ok",
@@ -211,6 +218,28 @@ async def test_health_does_not_retry_non_retryable_client_error() -> None:
         await client.async_health()
 
     assert len(session.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_idempotent_mutation_retries_transient_response_with_same_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import custom_components.cinema_collections.api_client as api_client
+
+    async def no_wait(_delay: float) -> None:
+        return None
+
+    monkeypatch.setattr(api_client.asyncio, "sleep", no_wait)
+    session = FakeSession([FakeResponse(503, {}), FakeResponse(202, {"id": "job-1"})])
+    client = WorkerApiClient("http://worker.local", "token", session)  # type: ignore[arg-type]
+
+    response = await client.async_compile("films", idempotency_key="stable-key")
+
+    assert response["id"] == "job-1"
+    assert [call["headers"]["Idempotency-Key"] for call in session.calls] == [
+        "stable-key",
+        "stable-key",
+    ]
 
 
 @pytest.mark.asyncio

@@ -101,6 +101,10 @@ def test_entity_modules_publish_required_stable_entity_keys() -> None:
         "latest_error",
         "current_job_progress",
         "worker_version",
+        "next_schedule",
+        "collection_priorities",
+        "compilation_summary",
+        "clip_states",
     }
     assert {description.key for description in BUTTON_DESCRIPTIONS} == {
         "scan_library",

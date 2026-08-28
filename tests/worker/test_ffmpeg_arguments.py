@@ -70,3 +70,29 @@ def test_builder_input_indices_and_transition_offsets_follow_segment_durations(t
     assert graph.index("[0:v]") < graph.index("[1:v]") < graph.index("[2:v]")
     assert "[v_intro][v_clip]xfade=transition=fade:duration=1:offset=3" in graph
     assert "[v_intro_clip][v_outro]xfade=transition=fade:duration=1:offset=12" in graph
+    assert "[1:a]aformat" in graph and "atrim=duration=4.000" in graph
+    assert "[2:a]aformat" in graph and "atrim=duration=3.000" in graph
+    assert "fade=t=out:st=13.5:d=1.5" in graph
+
+
+def test_builder_honors_h264_profile_level_and_decode_failure_policy(tmp_path):
+    profile = ProcessingProfile(decode_error_policy="fail")
+    job = JobRecord(
+        id="job-3",
+        collection_id="films",
+        clip_id="clip-3",
+        source_relative_path="films/source.mp4",
+        output_relative_path="films/result.mp4",
+        source_fingerprint="source",
+        profile_fingerprint="profile",
+        profile_settings=profile.model_dump(mode="json"),
+        duration_seconds=10,
+        source_path=tmp_path / "source.mp4",
+        temporary_output_path=tmp_path / "result.mp4",
+    )
+
+    command = FfmpegCommandBuilder().build(job)
+
+    assert command[command.index("-profile:v") + 1] == "high"
+    assert command[command.index("-level:v") + 1] == "5.1"
+    assert "-xerror" in command

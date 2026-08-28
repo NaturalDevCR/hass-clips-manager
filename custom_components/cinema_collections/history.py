@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, time, timedelta
 from random import SystemRandom
 from typing import Any, cast
 
@@ -48,10 +48,12 @@ class PlaybackHistoryStore:
         storage_key: str = _STORAGE_KEY,
         now: Callable[[], datetime] = dt_util.now,
         chooser: Callable[[tuple[str, ...]], str] | None = None,
+        reset_time: time = time(0, 0),
     ) -> None:
         self._hass = hass
         self._now = now
         self._chooser = chooser or SystemRandom().choice
+        self._reset_time = reset_time
         self._store: Store[dict[str, Any]] = Store(
             hass, _STORAGE_VERSION, storage_key, atomic_writes=True
         )
@@ -74,7 +76,11 @@ class PlaybackHistoryStore:
                 await self._store.async_save(self._serialized())
             if getattr(self._hass, "bus", None) is not None and self._cancel_daily_reset is None:
                 self._cancel_daily_reset = async_track_time_change(
-                    self._hass, self._async_daily_reset, hour=0, minute=0, second=0
+                    self._hass,
+                    self._async_daily_reset,
+                    hour=self._reset_time.hour,
+                    minute=self._reset_time.minute,
+                    second=0,
                 )
             return ResetResult(reset_ids, now)
 
@@ -136,7 +142,7 @@ class PlaybackHistoryStore:
                 return HistorySelection(collection_id, clip_id, round_number, history_reset)
 
             collections[collection_id] = {
-                "period_start": now.date().isoformat(),
+                "period_start": self._period_start(now),
                 "round_number": round_number,
                 "played_clip_ids": [*played_ids, clip_id],
                 "last_selected_clip_id": clip_id,
@@ -238,7 +244,7 @@ class PlaybackHistoryStore:
         self, now: datetime, data: dict[str, dict[str, dict[str, Any]]] | None = None
     ) -> tuple[str, ...]:
         target = self._data if data is None else data
-        expected_period = now.date().isoformat()
+        expected_period = self._period_start(now)
         collections = target["collections"]
         reset_ids = tuple(
             collection_id
@@ -249,10 +255,13 @@ class PlaybackHistoryStore:
             collections[collection_id] = self._reset_record(collections[collection_id], now)
         return reset_ids
 
-    @staticmethod
-    def _reset_record(record: Mapping[str, Any], now: datetime) -> dict[str, Any]:
+    def _period_start(self, now: datetime) -> str:
+        boundary = datetime.combine(now.date(), self._reset_time, tzinfo=now.tzinfo)
+        return (now.date() if now >= boundary else now.date() - timedelta(days=1)).isoformat()
+
+    def _reset_record(self, record: Mapping[str, Any], now: datetime) -> dict[str, Any]:
         return {
-            "period_start": now.date().isoformat(),
+            "period_start": self._period_start(now),
             "round_number": cast(int, record["round_number"]) + 1,
             "played_clip_ids": [],
             "last_selected_clip_id": None,

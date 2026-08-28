@@ -1,15 +1,23 @@
 import pytest
 from cinema_collections_worker.database import Database
-from cinema_collections_worker.domain import CollectionCreate, CollectionPatch
+from cinema_collections_worker.domain import CollectionCreate, CollectionPatch, ProfileCreate
 from cinema_collections_worker.repositories import (
     CollectionRepository,
     OptimisticConflict,
+    ProfileRepository,
     ResourceNotFound,
 )
 
 
+def _seed_profile(db: Database) -> None:
+    ProfileRepository(db).create(
+        ProfileCreate(id="p", name="P", settings={}), actor="test", request_id="profile"
+    )
+
+
 def test_stale_revision_conflicts_and_mutations_are_audited(tmp_path):
     db = Database.create(str(tmp_path / "worker.sqlite3"))
+    _seed_profile(db)
     repo = CollectionRepository(db)
     item = repo.create(
         CollectionCreate(
@@ -27,7 +35,8 @@ def test_stale_revision_conflicts_and_mutations_are_audited(tmp_path):
             "films", item.revision, CollectionPatch(name="Stale"), actor="ha", request_id="req-3"
         )
     audit = db.connection.execute(
-        "select action_type, target_id, summary from audit_events order by id"
+        "select action_type, target_id, summary from audit_events "
+        "where action_type like 'collection.%' order by id"
     ).fetchall()
     assert [row[0] for row in audit] == ["collection.create", "collection.patch"]
     assert audit[0][1] == "films"
@@ -45,6 +54,7 @@ def test_missing_target_is_not_reported_as_stale_revision(tmp_path):
 
 def test_nested_audit_secrets_are_redacted(tmp_path):
     db = Database.create(str(tmp_path / "worker.sqlite3"))
+    _seed_profile(db)
     repo = CollectionRepository(db)
     repo.create(
         CollectionCreate(

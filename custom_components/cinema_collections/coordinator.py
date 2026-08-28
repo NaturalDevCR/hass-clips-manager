@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from types import MappingProxyType
 from typing import Protocol, cast
@@ -13,16 +13,18 @@ from typing import Protocol, cast
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
+from homeassistant.util import dt as dt_util
 
 from .api_client import WorkerApiError
 from .const import CONF_OVERRIDE_COLLECTION_ID, CONF_OVERRIDE_MODE, DOMAIN
-from .models import WorkerHealth, WorkerStatus
+from .models import WorkerClip, WorkerHealth, WorkerStatus
 from .resolver import (
     CollectionPolicy,
     OverrideKind,
     OverrideMode,
     resolve_active_collection,
 )
+from .scheduler import CompilationSchedule
 from .subentries import collection_subentries
 
 _LOGGER = logging.getLogger(__name__)
@@ -41,6 +43,10 @@ class CoordinatorWorker(Protocol):
         """Return Worker operational status."""
         ...
 
+    async def async_list_clips(self) -> Sequence[WorkerClip]:
+        """Return the Worker catalog with live output availability."""
+        ...
+
 
 @dataclass(frozen=True, slots=True)
 class CoordinatorSnapshot:
@@ -53,6 +59,9 @@ class CoordinatorSnapshot:
     health: WorkerHealth | None
     available: bool
     error: str | None
+    next_schedule: datetime | None = None
+    priorities: Mapping[str, int] = field(default_factory=lambda: MappingProxyType({}))
+    clip_states: Mapping[str, int] = field(default_factory=lambda: MappingProxyType({}))
 
     @property
     def queue_depth(self) -> int | None:
@@ -92,6 +101,13 @@ class CoordinatorSnapshot:
             return self.status.latest_errors[0].message
         return None
 
+    @property
+    def compilation_summary(self) -> str:
+        """Return a compact ready/total summary for native dashboards."""
+
+        total = sum(self.clip_states.values())
+        return f"{self.clip_states.get('ready', 0)}/{total} ready"
+
 
 class CinemaCollectionsCoordinator(DataUpdateCoordinator[CoordinatorSnapshot]):
     """Poll bounded Worker status while retaining local schedule policy on disconnect."""
@@ -103,6 +119,7 @@ class CinemaCollectionsCoordinator(DataUpdateCoordinator[CoordinatorSnapshot]):
         *,
         collections: Callable[[], Sequence[CollectionPolicy]],
         override: Callable[[], OverrideMode],
+        schedules: Callable[[], Sequence[CompilationSchedule]] | None = None,
         entry: ConfigEntry | None = None,
         now: Callable[[], datetime] | None = None,
     ) -> None:
@@ -117,15 +134,22 @@ class CinemaCollectionsCoordinator(DataUpdateCoordinator[CoordinatorSnapshot]):
         self.client = client
         self._collections = collections
         self._override = override
+        self._schedules = schedules or (lambda: ())
         self._now = now or (lambda: datetime.now(UTC))
         self._failure_count = 0
 
     async def async_update_data(self) -> CoordinatorSnapshot:
         """Read Worker state with bounded backoff, without losing local resolution."""
-        selection = resolve_active_collection(self._collections(), self._override(), self._now())
+        now = self._now()
+        policies = tuple(self._collections())
+        selection = resolve_active_collection(policies, self._override(), now)
+        priorities = MappingProxyType({item.id: item.priority for item in policies})
+        next_schedule = _next_schedule(tuple(self._schedules()), now)
         try:
-            health, status = await asyncio.gather(
-                self.client.async_health(), self.client.async_status()
+            health, status, clips = await asyncio.gather(
+                self.client.async_health(),
+                self.client.async_status(),
+                _clips_request(self.client),
             )
         except WorkerApiError as error:
             self._failure_count += 1
@@ -140,6 +164,8 @@ class CinemaCollectionsCoordinator(DataUpdateCoordinator[CoordinatorSnapshot]):
                 health=None,
                 available=False,
                 error=str(error),
+                next_schedule=next_schedule,
+                priorities=priorities,
             )
 
         self._failure_count = 0
@@ -152,7 +178,44 @@ class CinemaCollectionsCoordinator(DataUpdateCoordinator[CoordinatorSnapshot]):
             health=health,
             available=True,
             error=None,
+            next_schedule=next_schedule,
+            priorities=priorities,
+            clip_states=_clip_state_counts(clips),
         )
+
+
+async def _clips_request(client: CoordinatorWorker) -> Sequence[WorkerClip]:
+    """Return the Worker clip catalog when the client supports it."""
+    method = getattr(client, "async_list_clips", None)
+    if callable(method):
+        return await cast("Callable[[], Awaitable[Sequence[WorkerClip]]]", method)()
+    return ()
+
+
+def _clip_state_counts(clips: Sequence[WorkerClip]) -> Mapping[str, int]:
+    counts: dict[str, int] = {}
+    for clip in clips:
+        counts[clip.state] = counts.get(clip.state, 0) + 1
+    return MappingProxyType(dict(sorted(counts.items())))
+
+
+def _next_schedule(schedules: Sequence[CompilationSchedule], now: datetime) -> datetime | None:
+    """Resolve the next enabled local occurrence within one weekly cycle."""
+
+    local_now = dt_util.as_local(now)
+    candidates: list[datetime] = []
+    for schedule in schedules:
+        if not schedule.enabled:
+            continue
+        for offset in range(8):
+            day = local_now.date() + timedelta(days=offset)
+            if day.weekday() not in schedule.weekdays:
+                continue
+            candidate = datetime.combine(day, schedule.local_time, tzinfo=local_now.tzinfo)
+            if candidate >= local_now:
+                candidates.append(candidate)
+                break
+    return min(candidates, default=None)
 
 
 def policies_for_entry(entry: ConfigEntry) -> tuple[CollectionPolicy, ...]:

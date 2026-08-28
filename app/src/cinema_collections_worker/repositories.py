@@ -147,6 +147,37 @@ class _Repository:
 
 
 class CollectionRepository(_Repository):
+    def _require_profile(self, profile_id: str) -> None:
+        if (
+            self.db.connection.execute(
+                "SELECT 1 FROM profiles WHERE id=?", (profile_id,)
+            ).fetchone()
+            is None
+        ):
+            raise ResourceNotFound(profile_id)
+
+    def _demote_other_defaults(
+        self, keep_id: str, *, actor: str | None, request_id: str | None
+    ) -> None:
+        rows = self.db.connection.execute(
+            "SELECT id, revision FROM collections WHERE is_default=1 AND id<>?",
+            (keep_id,),
+        ).fetchall()
+        now = _now()
+        for row in rows:
+            self.db.connection.execute(
+                "UPDATE collections SET is_default=0, revision=revision+1, updated_at=? "
+                "WHERE id=? AND revision=?",
+                (now, row["id"], row["revision"]),
+            )
+            self._audit(
+                "collection.default_demoted",
+                str(row["id"]),
+                actor,
+                request_id,
+                {"replaced_by": keep_id, "prior_revision": row["revision"]},
+            )
+
     def create(
         self, payload: CollectionCreate, *, actor: str | None = None, request_id: str | None = None
     ) -> CollectionRecord:
@@ -162,14 +193,12 @@ class CollectionRepository(_Repository):
         )
         if replay is not None:
             return replay
+        self._require_profile(payload.processing_profile_id)
         now = _now()
         try:
-            with self.db.connection:
+            with self.db.transaction():
                 if payload.is_default:
-                    self.db.connection.execute(
-                        "UPDATE collections SET is_default=0, updated_at=? WHERE is_default=1",
-                        (now,),
-                    )
+                    self._demote_other_defaults(payload.id, actor=actor, request_id=request_id)
                 self.db.connection.execute(
                     "INSERT INTO collections(id,name,enabled,source_directory,compiled_output_prefix,processing_profile_id,is_default,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
                     (
@@ -247,6 +276,8 @@ class CollectionRepository(_Repository):
             return replay
         if not values:
             raise ValueError("patch must not be empty")
+        if "processing_profile_id" in values:
+            self._require_profile(str(values["processing_profile_id"]))
         columns = {
             "name": "name",
             "enabled": "enabled",
@@ -266,12 +297,9 @@ class CollectionRepository(_Repository):
                 _json(value) if key == "tags" else int(value) if isinstance(value, bool) else value
             )
         args.extend([_now(), id, revision])
-        with self.db.connection:
+        with self.db.transaction():
             if values.get("is_default") is True:
-                self.db.connection.execute(
-                    "UPDATE collections SET is_default=0, updated_at=? WHERE is_default=1 AND id<>?",
-                    (_now(), id),
-                )
+                self._demote_other_defaults(id, actor=actor, request_id=request_id)
             cur = self.db.connection.execute(
                 f"UPDATE collections SET {', '.join(assignments)}, revision=revision+1, updated_at=? WHERE id=? AND revision=?",
                 args,
@@ -304,7 +332,7 @@ class ProfileRepository(_Repository):
             return replay
         now = _now()
         try:
-            with self.db.connection:
+            with self.db.transaction():
                 self.db.connection.execute(
                     "INSERT INTO profiles(id,name,settings,created_at,updated_at) VALUES(?,?,?,?,?)",
                     (payload.id, payload.name, _json(payload.settings), now, now),
@@ -375,7 +403,7 @@ class ProfileRepository(_Repository):
             args = [_json(values["settings"]), _now(), id, revision]
         else:
             sql = "UPDATE profiles SET name=?, version=version+1, revision=revision+1, updated_at=? WHERE id=? AND revision=?"
-        with self.db.connection:
+        with self.db.transaction():
             if self.db.connection.execute(sql, args).rowcount != 1:
                 if (
                     self.db.connection.execute(

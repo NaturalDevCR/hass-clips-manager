@@ -11,7 +11,7 @@ from contextlib import suppress
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 from uuid import UUID
 
 from fastapi import UploadFile
@@ -178,13 +178,13 @@ class LibraryManager:
             (action_type, target_id, self.actor, request_id, summary, occurred_at),
         )
         return AuditEvent(
-            id=int(cursor.lastrowid),
+            id=int(cursor.lastrowid or 0),
             action_type=action_type,
             target_id=target_id,
             actor=self.actor,
             request_id=request_id,
             summary=summary,
-            occurred_at=occurred_at,
+            occurred_at=datetime.fromisoformat(occurred_at),
             details=details,
         )
 
@@ -212,7 +212,10 @@ class LibraryManager:
             )
 
     @staticmethod
-    def _raise_with_compensation(original: Exception, compensation_errors: list[Exception]) -> None:
+    @staticmethod
+    def _raise_with_compensation(
+        original: Exception, compensation_errors: list[Exception]
+    ) -> NoReturn:
         if compensation_errors:
             message = "; ".join(str(error) for error in compensation_errors)
             raise RuntimeError(f"{original}; compensation failed: {message}") from original
@@ -321,6 +324,29 @@ class LibraryManager:
         self._audit("library.imported", clip_id, {"collection_id": collection_id, "filename": name})
         return self._clip_from_row(self._clip_row(clip_id))
 
+    def create_collection_directory(self, collection_id: str, relative_path: str) -> AuditEvent:
+        """Create one approved subdirectory inside a configured collection root."""
+
+        relative = validate_relative_path(relative_path)
+        collection_root = self._collection_source_root(collection_id)
+        collection_relative = collection_root.relative_to(self.resolver.roots[RootKey.SOURCE])
+        destination = self.resolver.resolve(
+            RootKey.SOURCE.value, (collection_relative / relative).as_posix()
+        )
+        if destination.exists() or destination.is_symlink():
+            raise ValueError("destination already exists")
+        destination.mkdir(parents=True, exist_ok=False)
+        try:
+            return self._audit(
+                "library.directory_created",
+                collection_id,
+                {"relative_path": relative},
+            )
+        except Exception:
+            with suppress(OSError):
+                destination.rmdir()
+            raise
+
     def rename_or_move(self, clip_id: str | UUID, destination_relative_path: str) -> ClipRecord:
         """Move a source clip within its configured collection while retaining its UUID."""
 
@@ -354,7 +380,7 @@ class LibraryManager:
         self, clip_id: str | UUID, tags: list[str], notes: str | None
     ) -> ClipRecord:
         row = self._clip_row(clip_id)
-        if any(not isinstance(tag, str) or not tag.strip() for tag in tags):
+        if any(not tag.strip() for tag in tags):
             raise ValueError("tags must be non-empty strings")
         metadata = json.loads(row["metadata"] or "{}")
         metadata["tags"] = list(dict.fromkeys(tag.strip() for tag in tags))
@@ -617,34 +643,25 @@ class LibraryManager:
         except Exception as exc:
             self._mark_request_failed(request_id, exc)
             raise
+        staging_dir = self.trash_root / ".permanent-delete" / request_id
+        staged_source = (
+            staging_dir / self._trash_filename("source", source) if source is not None else None
+        )
+        staged_output = (
+            staging_dir / self._trash_filename("output", output) if output is not None else None
+        )
+        moves: list[tuple[Path, Path]] = []
         try:
-            # Each unlink is an exact resolved file selected from this catalog row.
-            if source is not None:
-                source.unlink()
-            if output is not None:
-                output.unlink()
-            now = self._now()
-            with self.db.connection:
-                self.db.connection.execute(
-                    "UPDATE clips SET state=?, output_available=?, updated_at=? WHERE id=?",
-                    (
-                        ClipState.DELETED.value if source_selected else row["state"],
-                        0 if output_selected else int(bool(row["output_available"])),
-                        now,
-                        str(clip_id),
-                    ),
-                )
-                self.db.connection.execute(
-                    "UPDATE lifecycle_requests SET state='completed', finished_at=? "
-                    "WHERE id=? AND state='pending'",
-                    (now, request_id),
-                )
-                return self._insert_audit(
-                    "library.permanently_deleted",
-                    str(clip_id),
-                    {"request_id": request_id, **details},
-                )
+            # Stage every exact catalog target before any irreversible unlink. If
+            # the second move fails, compensation restores the first target.
+            if source is not None and staged_source is not None:
+                self._move_exact(source, staged_source)
+                moves.append((source, staged_source))
+            if output is not None and staged_output is not None:
+                self._move_exact(output, staged_output)
+                moves.append((output, staged_output))
         except Exception as exc:
+            compensation_errors = self._compensate_moves(moves)
             self._mark_request_failed(request_id, exc)
             with suppress(Exception):
                 self._audit(
@@ -652,4 +669,50 @@ class LibraryManager:
                     str(clip_id),
                     {"request_id": request_id, "failure": str(exc)[:1000]},
                 )
-            raise
+            self._raise_with_compensation(exc, compensation_errors)
+
+        now = self._now()
+        with self.db.connection:
+            self.db.connection.execute(
+                "UPDATE clips SET state=?, output_available=?, updated_at=? WHERE id=?",
+                (
+                    ClipState.DELETED.value if source_selected else row["state"],
+                    0 if output_selected else int(bool(row["output_available"])),
+                    now,
+                    str(clip_id),
+                ),
+            )
+            self.db.connection.execute(
+                "UPDATE lifecycle_requests SET state='staged', finished_at=? "
+                "WHERE id=? AND state='pending'",
+                (now, request_id),
+            )
+
+        cleanup_errors: list[str] = []
+        for staged in (staged_source, staged_output):
+            if staged is None:
+                continue
+            try:
+                staged.unlink()
+            except OSError as exc:
+                cleanup_errors.append(str(exc)[:500])
+        with suppress(OSError):
+            staging_dir.rmdir()
+            staging_dir.parent.rmdir()
+        final_state = "completed_with_residue" if cleanup_errors else "completed"
+        final_details = {
+            "request_id": request_id,
+            **details,
+            "cleanup_pending": bool(cleanup_errors),
+        }
+        with self.db.connection:
+            self.db.connection.execute(
+                "UPDATE lifecycle_requests SET state=?, failure=?, finished_at=? WHERE id=?",
+                (
+                    final_state,
+                    "; ".join(cleanup_errors) if cleanup_errors else None,
+                    self._now(),
+                    request_id,
+                ),
+            )
+            return self._insert_audit("library.permanently_deleted", str(clip_id), final_details)

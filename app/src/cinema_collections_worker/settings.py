@@ -12,6 +12,35 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, m
 
 from .paths import RootKey
 
+_KNOWN_WEAK_SECRETS = {
+    "change-me-before-starting",
+    "changeme",
+    "password",
+    "secret",
+    "test-token",
+}
+
+
+def _validated_bearer_secret(value: SecretStr) -> SecretStr:
+    secret = value.get_secret_value()
+    if len(secret) < 43 or secret.lower() in _KNOWN_WEAK_SECRETS or len(set(secret)) < 16:
+        raise ValueError("bearer_secret must be a random 256-bit token")
+    return value
+
+
+def _reject_overlapping_roots(roots: dict[RootKey, Path]) -> None:
+    canonical = {key: path.resolve(strict=False) for key, path in roots.items()}
+    for key, path in canonical.items():
+        if not path.is_absolute() or path == Path("/"):
+            raise ValueError(f"{key.value}_root must be an absolute non-root path")
+    items = tuple(canonical.items())
+    for index, (left_key, left) in enumerate(items):
+        for right_key, right in items[index + 1 :]:
+            if left == right or left.is_relative_to(right) or right.is_relative_to(left):
+                raise ValueError(
+                    f"{left_key.value}_root and {right_key.value}_root must not overlap"
+                )
+
 
 class WorkerMode(StrEnum):
     APP = "app"
@@ -50,9 +79,7 @@ class AppOptions(BaseModel):
     @field_validator("bearer_secret")
     @classmethod
     def _valid_secret(cls, value: SecretStr) -> SecretStr:
-        if not value.get_secret_value():
-            raise ValueError("bearer_secret must not be empty")
-        return value
+        return _validated_bearer_secret(value)
 
     @model_validator(mode="after")
     def _media_roots_are_contained(self) -> AppOptions:
@@ -69,6 +96,16 @@ class AppOptions(BaseModel):
             raise ValueError("media_root must not be the filesystem root")
         self._require_descendant(self.source_root, canonical_media_root, "source_root")
         self._require_descendant(self.compiled_root, canonical_media_root, "compiled_root")
+        source = self.source_root.resolve(strict=False)
+        compiled = self.compiled_root.resolve(strict=False)
+        if source == compiled or source.is_relative_to(compiled) or compiled.is_relative_to(source):
+            raise ValueError("source_root and compiled_root must not overlap")
+        data_dir = self._canonical_root(self.data_dir, "data_dir")
+        for path, name in (
+            (self.temp_root or data_dir / "tmp", "temp_root"),
+            (self.assets_root or data_dir / "assets", "assets_root"),
+        ):
+            self._require_descendant(path, data_dir, name)
         return self
 
     @staticmethod
@@ -104,6 +141,31 @@ class WorkerSettings(BaseModel):
     database_path: Path
     log_dir: Path
     temp_dir: Path
+
+    @field_validator("bearer_secret")
+    @classmethod
+    def _valid_runtime_secret(cls, value: SecretStr) -> SecretStr:
+        return _validated_bearer_secret(value)
+
+    @model_validator(mode="after")
+    def _safe_runtime_paths(self) -> WorkerSettings:
+        if set(self.roots) != set(RootKey):
+            raise ValueError("all Worker roots must be configured")
+        _reject_overlapping_roots(self.roots)
+        data_dir = self.data_dir.resolve(strict=False)
+        if not data_dir.is_absolute() or data_dir == Path("/"):
+            raise ValueError("data_dir must be an absolute non-root path")
+        for path, name in (
+            (self.database_path, "database_path"),
+            (self.log_dir, "log_dir"),
+            (self.temp_dir, "temp_dir"),
+        ):
+            candidate = path.resolve(strict=False)
+            if not candidate.is_relative_to(data_dir):
+                raise ValueError(f"{name} must stay below data_dir")
+        if self.temp_dir.resolve(strict=False) != self.roots[RootKey.TEMP].resolve(strict=False):
+            raise ValueError("temp_dir must match the tracked temporary root")
+        return self
 
     @classmethod
     def from_options(cls, options: AppOptions) -> WorkerSettings:

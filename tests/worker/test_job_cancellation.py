@@ -29,6 +29,9 @@ class _NeverFinishesProcess:
     pid = 5151
     returncode = None
 
+    def communicate(self, timeout):
+        raise TimeoutError
+
 
 class _RecordingCatalog:
     def __init__(self) -> None:
@@ -76,7 +79,7 @@ def test_cancelling_running_job_terminates_process_group_and_removes_temp(tmp_pa
     result = worker.run_once()
 
     assert result is not None and result.job.state is JobState.CANCELLED
-    assert killed == [(4242, signal.SIGTERM)]
+    assert killed == [(4242, signal.SIGTERM), (4242, signal.SIGKILL)]
     assert not temp_dir.exists()
 
 
@@ -106,7 +109,7 @@ def test_timeout_terminates_process_and_stops_after_retry_cap(tmp_path, monkeypa
 
     assert result is not None and result.job.state is JobState.FAILED
     assert not result.retry_scheduled
-    assert killed == [(5151, signal.SIGTERM)]
+    assert killed == [(5151, signal.SIGTERM), (5151, signal.SIGKILL)]
 
 
 def test_cleanup_rejects_non_uuid_or_out_of_root_temporary_directory(tmp_path):
@@ -142,16 +145,24 @@ def test_scan_job_dispatches_catalog_scan_without_entering_compile_execution(tmp
     assert "added=2" in result.job.logs[-1]
 
 
-def test_cleanup_job_removes_only_uuid_temp_directories_without_compile_execution(tmp_path) -> None:
+def test_cleanup_job_removes_only_tracked_inactive_job_directories(tmp_path) -> None:
     db, resolver, _service = _configured_service(tmp_path)
-    stale = resolver.roots["temp"] / str(uuid.uuid4())
+    tracked_id = str(uuid.uuid4())
+    stale = resolver.roots["temp"] / tracked_id
     stale.mkdir()
     (stale / "partial.mp4").write_bytes(b"partial")
+    tracked = _maintenance_job("cleanup")
+    tracked = tracked.model_copy(update={"id": tracked_id, "clip_id": tracked_id})
+    from cinema_collections_worker.queue import PersistentJobQueue
+
+    PersistentJobQueue(db).enqueue(tracked)
+    with db.connection:
+        db.connection.execute("UPDATE jobs SET state='failed' WHERE id=?", (tracked_id,))
+    untracked = resolver.roots["temp"] / str(uuid.uuid4())
+    untracked.mkdir()
     preserved = resolver.roots["temp"] / "not-a-job"
     preserved.mkdir()
     job = _maintenance_job("cleanup")
-    from cinema_collections_worker.queue import PersistentJobQueue
-
     PersistentJobQueue(db).enqueue(job)
     worker = JobWorker(
         db,
@@ -163,4 +174,29 @@ def test_cleanup_job_removes_only_uuid_temp_directories_without_compile_executio
 
     assert result is not None and result.job.state is JobState.SUCCEEDED
     assert not stale.exists()
+    assert untracked.exists()
     assert preserved.exists()
+
+
+def test_failed_process_output_is_bounded_and_redacts_roots_and_bearer_tokens(tmp_path) -> None:
+    db, resolver, service = _configured_service(tmp_path)
+    service.enqueue_compile(CompileRequest(collection_id="films", max_attempts=1))
+
+    class FailedProcess:
+        pid = 0
+        returncode = 1
+
+        def communicate(self, timeout):
+            return "", f"{resolver.roots['source']}/films/example.mp4 Bearer leaked-token"
+
+    result = JobWorker(
+        db,
+        resolver,
+        probe_client=_ValidProbe(),
+        process_factory=lambda *_args, **_kwargs: FailedProcess(),
+    ).run_once()
+
+    assert result is not None and result.job.state is JobState.FAILED
+    assert str(resolver.roots["source"]) not in str(result.job.error)
+    assert "leaked-token" not in str(result.job.error)
+    assert len(str(result.job.error)) <= 1000

@@ -163,6 +163,8 @@ async def test_options_flow_persists_explicit_override(
         data={
             CONF_OVERRIDE_MODE: "explicit",
             CONF_OVERRIDE_COLLECTION_ID: "films",
+            "history_reset_time": "00:00",
+            "sync_on_startup": True,
         },
     )
 

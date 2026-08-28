@@ -62,56 +62,70 @@ class PersistentJobQueue:
     def enqueue(self, job: JobRecord) -> JobRecord:
         """Return an existing active duplicate, otherwise persist ``job``."""
 
-        with self.db.connection:
-            duplicate = self.db.connection.execute(
-                "SELECT * FROM jobs WHERE fingerprint=? AND state IN ('queued','running') "
-                "ORDER BY created_at LIMIT 1",
-                (job.fingerprint,),
-            ).fetchone()
-            if duplicate is not None:
-                return self._record(duplicate)
-            payload = job.model_dump(
-                mode="json",
-                exclude={
-                    "id",
-                    "kind",
-                    "state",
-                    "progress",
-                    "created_at",
-                    "started_at",
-                    "finished_at",
-                    "error",
-                    "collection_id",
-                    "clip_id",
-                    "fingerprint",
-                    "attempt",
-                    "max_attempts",
-                    "cancel_requested",
-                },
-            )
-            self.db.connection.execute(
-                "INSERT INTO jobs(id,kind,state,progress,created_at,finished_at,error,collection_id,clip_id,"
-                "fingerprint,payload,attempt,max_attempts,cancel_requested,started_at) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (
-                    job.id,
-                    job.kind,
-                    job.state,
-                    json.dumps(job.progress.model_dump(mode="json"), separators=(",", ":")),
-                    job.created_at.isoformat(),
-                    job.finished_at.isoformat() if job.finished_at else None,
-                    job.error,
-                    job.collection_id,
-                    job.clip_id,
-                    job.fingerprint,
-                    json.dumps(payload, separators=(",", ":"), sort_keys=True),
-                    job.attempt,
-                    job.max_attempts,
-                    int(job.cancel_requested),
-                    job.started_at.isoformat() if job.started_at else None,
-                ),
-            )
-        return job
+        return self.enqueue_many([job])[0]
+
+    def enqueue_many(self, jobs: list[JobRecord]) -> list[JobRecord]:
+        """Atomically persist a batch and mark only newly queued clips pending."""
+
+        results: list[JobRecord] = []
+        with self.db.transaction():
+            for job in jobs:
+                duplicate = self.db.connection.execute(
+                    "SELECT * FROM jobs WHERE fingerprint=? AND state IN ('queued','running') "
+                    "ORDER BY created_at LIMIT 1",
+                    (job.fingerprint,),
+                ).fetchone()
+                if duplicate is not None:
+                    results.append(self._record(duplicate))
+                    continue
+                payload = job.model_dump(
+                    mode="json",
+                    exclude={
+                        "id",
+                        "kind",
+                        "state",
+                        "progress",
+                        "created_at",
+                        "started_at",
+                        "finished_at",
+                        "error",
+                        "collection_id",
+                        "clip_id",
+                        "fingerprint",
+                        "attempt",
+                        "max_attempts",
+                        "cancel_requested",
+                    },
+                )
+                self.db.connection.execute(
+                    "INSERT INTO jobs(id,kind,state,progress,created_at,finished_at,error,collection_id,clip_id,"
+                    "fingerprint,payload,attempt,max_attempts,cancel_requested,started_at) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        job.id,
+                        job.kind,
+                        job.state,
+                        json.dumps(job.progress.model_dump(mode="json"), separators=(",", ":")),
+                        job.created_at.isoformat(),
+                        job.finished_at.isoformat() if job.finished_at else None,
+                        job.error,
+                        job.collection_id,
+                        job.clip_id,
+                        job.fingerprint,
+                        json.dumps(payload, separators=(",", ":"), sort_keys=True),
+                        job.attempt,
+                        job.max_attempts,
+                        int(job.cancel_requested),
+                        job.started_at.isoformat() if job.started_at else None,
+                    ),
+                )
+                if job.kind == "compile":
+                    self.db.connection.execute(
+                        "UPDATE clips SET state='pending', updated_at=? WHERE id=?",
+                        (utc_now(), job.clip_id),
+                    )
+                results.append(job)
+        return results
 
     def has_succeeded(self, fingerprint: str) -> bool:
         return (
@@ -125,7 +139,7 @@ class PersistentJobQueue:
     def claim_next(self) -> JobRecord | None:
         """Claim one queued job only when no job is already running."""
 
-        with self.db.connection:
+        with self.db.transaction():
             candidate = self.db.connection.execute(
                 "SELECT id FROM jobs WHERE state='queued' ORDER BY created_at, id LIMIT 1"
             ).fetchone()
@@ -158,12 +172,17 @@ class PersistentJobQueue:
             row = self.db.connection.execute(
                 "SELECT * FROM jobs WHERE id=?", (candidate["id"],)
             ).fetchone()
+            if row["kind"] == "compile":
+                self.db.connection.execute(
+                    "UPDATE clips SET state='compiling', updated_at=? WHERE id=?",
+                    (started, row["clip_id"]),
+                )
         return self._record(row)
 
     def update(self, job: JobRecord) -> JobRecord:
         """Persist mutable execution state without changing immutable payload."""
 
-        with self.db.connection:
+        with self.db.transaction():
             payload_row = self.db.connection.execute(
                 "SELECT payload FROM jobs WHERE id=?", (job.id,)
             ).fetchone()
@@ -191,10 +210,27 @@ class PersistentJobQueue:
                     "UPDATE job_attempts SET state=?, finished_at=? WHERE job_id=? AND finished_at IS NULL",
                     (job.state, utc_now(), job.id),
                 )
+            if job.kind == "compile":
+                if job.state == "queued":
+                    clip_state = "pending"
+                elif job.state == "failed":
+                    clip_state = "failed"
+                elif job.state == "cancelled":
+                    available = self.db.connection.execute(
+                        "SELECT output_available FROM clips WHERE id=?", (job.clip_id,)
+                    ).fetchone()
+                    clip_state = "stale" if available and available[0] else "discovered"
+                else:
+                    clip_state = None
+                if clip_state is not None:
+                    self.db.connection.execute(
+                        "UPDATE clips SET state=?, updated_at=? WHERE id=?",
+                        (clip_state, utc_now(), job.clip_id),
+                    )
         return self.get(job.id)
 
     def request_cancel(self, job_id: str) -> JobRecord:
-        with self.db.connection:
+        with self.db.transaction():
             row = self.db.connection.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
             if row is None:
                 raise KeyError(job_id)
@@ -210,6 +246,12 @@ class PersistentJobQueue:
                         job_id,
                     ),
                 )
+                if row["kind"] == "compile":
+                    self.db.connection.execute(
+                        "UPDATE clips SET state=CASE WHEN output_available=1 THEN 'stale' "
+                        "ELSE 'discovered' END, updated_at=? WHERE id=?",
+                        (utc_now(), row["clip_id"]),
+                    )
             else:
                 self.db.connection.execute(
                     "UPDATE jobs SET cancel_requested=1 WHERE id=?", (job_id,)

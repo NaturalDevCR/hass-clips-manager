@@ -4,10 +4,12 @@ import pytest
 from cinema_collections_worker.paths import RootKey
 from cinema_collections_worker.settings import HardwareAcceleration, Settings, WorkerMode
 
+_VALID_SECRET = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFG"
+
 
 def test_load_defaults_and_persistent_paths(tmp_path: Path) -> None:
-    options = tmp_path / "options.yaml"
-    options.write_text("bearer_secret: test-secret\n", encoding="utf-8")
+    options = tmp_path / "options.json"
+    options.write_text(f'{{"bearer_secret":"{_VALID_SECRET}"}}', encoding="utf-8")
     settings = Settings.load(options)
     assert settings.mode is WorkerMode.APP
     assert settings.bind_host == "127.0.0.1"
@@ -32,6 +34,33 @@ def test_extra_options_are_rejected(tmp_path: Path) -> None:
         Settings.load(options)
 
 
+@pytest.mark.parametrize(
+    "secret",
+    ["change-me-before-starting", "password", "short-static-secret"],
+)
+def test_public_or_weak_bearer_secrets_are_rejected(tmp_path: Path, secret: str) -> None:
+    options = tmp_path / "options.json"
+    options.write_text(f'{{"bearer_secret":"{secret}"}}', encoding="utf-8")
+
+    with pytest.raises(ValueError, match="invalid Worker options"):
+        Settings.load(options)
+
+
+def test_overlapping_operational_roots_are_rejected(tmp_path: Path) -> None:
+    options = tmp_path / "options.json"
+    options.write_text(
+        "{"
+        + f'"bearer_secret":"{_VALID_SECRET}",'
+        + '"source_root":"/media/library",'
+        + '"compiled_root":"/media/library/compiled"'
+        + "}",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="invalid Worker options"):
+        Settings.load(options)
+
+
 @pytest.mark.parametrize("unsafe_root", ["/", "/data/clips", "/addon_config/clips", "/outside"])
 def test_app_mode_rejects_media_roots_outside_canonical_media_mount(
     tmp_path: Path, unsafe_root: str
@@ -49,7 +78,7 @@ def test_app_mode_rejects_media_roots_outside_canonical_media_mount(
 def test_external_mode_requires_explicit_media_root_and_containment(tmp_path: Path) -> None:
     options = tmp_path / "options.yaml"
     options.write_text(
-        "mode: external\nbearer_secret: secret\nsource_root: /mnt/media/source\n"
+        f"mode: external\nbearer_secret: {_VALID_SECRET}\nsource_root: /mnt/media/source\n"
         "compiled_root: /mnt/media/compiled\n",
         encoding="utf-8",
     )
@@ -57,7 +86,7 @@ def test_external_mode_requires_explicit_media_root_and_containment(tmp_path: Pa
         Settings.load(options)
 
     options.write_text(
-        "mode: external\nbearer_secret: secret\nmedia_root: /mnt/media\n"
+        f"mode: external\nbearer_secret: {_VALID_SECRET}\nmedia_root: /mnt/media\n"
         "source_root: /mnt/media/source\ncompiled_root: /mnt/media/compiled\n",
         encoding="utf-8",
     )

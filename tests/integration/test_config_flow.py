@@ -6,7 +6,13 @@ import pytest
 
 pytest.importorskip("homeassistant")
 
-from custom_components.cinema_collections.const import CONF_ENDPOINT, CONF_TOKEN, DOMAIN
+from custom_components.cinema_collections.const import (
+    CONF_ENDPOINT,
+    CONF_MEDIA_URI_PREFIX,
+    CONF_TOKEN,
+    DEFAULT_MEDIA_URI_PREFIX,
+    DOMAIN,
+)
 
 
 @pytest.mark.asyncio
@@ -26,6 +32,7 @@ async def test_user_flow_pairs_compatible_worker(
     assert result["data"] == {
         CONF_ENDPOINT: "http://worker.local",
         CONF_TOKEN: "pairing-token",
+        CONF_MEDIA_URI_PREFIX: DEFAULT_MEDIA_URI_PREFIX,
     }
 
 

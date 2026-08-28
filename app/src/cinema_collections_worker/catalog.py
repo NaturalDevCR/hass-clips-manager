@@ -72,20 +72,24 @@ class CatalogService:
                 found.append((relative, candidate))
         return found
 
-    @staticmethod
-    def _profile_fingerprint(settings: object) -> str:
-        """Fingerprint validated profile settings, tolerating incomplete legacy rows."""
-        try:
-            if isinstance(settings, dict):
-                assets = settings.get("assets", {})
-                profile = ProcessingProfile.model_validate(settings)
-                return profile_fingerprint(
-                    profile, assets if isinstance(assets, dict) else AssetFingerprints()
-                )
-        except Exception:
-            pass
-        canonical = json.dumps(settings, sort_keys=True, separators=(",", ":"), default=str)
-        return hashlib.sha256(canonical.encode()).hexdigest()
+    def _profile_details(self, settings: object) -> tuple[ProcessingProfile, str]:
+        """Validate profile settings and include exact referenced asset fingerprints."""
+
+        profile = ProcessingProfile.model_validate(settings)
+
+        def fingerprint(reference: str | None) -> str | None:
+            if reference is None:
+                return None
+            return self._fingerprint(self.resolver.resolve(RootKey.ASSETS.value, reference))
+
+        intro = fingerprint(profile.intro_reference)
+        outro = (
+            intro
+            if profile.outro_reference == profile.intro_reference
+            else fingerprint(profile.outro_reference)
+        )
+        assets = AssetFingerprints(intro_fingerprint=intro, outro_fingerprint=outro)
+        return profile, profile_fingerprint(profile, assets)
 
     def scan(self, collection_ids: set[str] | None = None) -> ScanSummary:
         selected = collection_ids
@@ -102,8 +106,10 @@ class CatalogService:
                     "SELECT settings FROM profiles WHERE id=?",
                     (collection["processing_profile_id"],),
                 ).fetchone()
-                profile_settings = json.loads(profile_row["settings"]) if profile_row else {}
-                current_profile_fingerprint = self._profile_fingerprint(profile_settings)
+                if profile_row is None:
+                    raise ValueError("collection references an unavailable processing profile")
+                profile_settings = json.loads(profile_row["settings"])
+                profile, current_profile_fingerprint = self._profile_details(profile_settings)
                 root = self.resolver.resolve(RootKey.SOURCE.value, collection["source_directory"])
                 for relative, path in self._files(root):
                     key = (collection_id, relative)
@@ -161,9 +167,7 @@ class CatalogService:
                             modified += 1
                             continue
                         clip_id = str(uuid.uuid4())
-                        output = (
-                            f"{collection['compiled_output_prefix']}/{clip_id}{path.suffix.lower()}"
-                        )
+                        output = f"{collection['compiled_output_prefix']}/{clip_id}.{profile.output.extension}"
                         self.db.connection.execute(
                             "INSERT INTO clips(id, collection_id, state, relative_source_path, relative_output_path, "
                             "duration_seconds, output_available, metadata, updated_at) VALUES(?,?,?,?,?,?,?,?,?)",

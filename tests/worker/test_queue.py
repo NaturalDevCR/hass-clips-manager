@@ -71,14 +71,16 @@ def test_enqueue_deduplicates_same_clip_source_and_profile_fingerprint(tmp_path)
 
 def test_profile_change_creates_new_job_instead_of_deduplicating_old_snapshot(tmp_path):
     db, _resolver, service = _configured_service(tmp_path)
-    first = service.enqueue_compile(CompileRequest(collection_id="films"))
+    first = service.enqueue_compile(CompileRequest(collection_id="films", skip_if_processing=False))
     changed = ProcessingProfile(video={"width": 1920, "height": 1080}).model_dump(mode="json")
     with db.connection:
         db.connection.execute(
             "UPDATE profiles SET settings=? WHERE id='profile'", (json.dumps(changed),)
         )
 
-    second = service.enqueue_compile(CompileRequest(collection_id="films"))
+    second = service.enqueue_compile(
+        CompileRequest(collection_id="films", skip_if_processing=False)
+    )
 
     assert first[0].id != second[0].id
 
@@ -128,3 +130,70 @@ def test_enqueue_accounts_for_total_estimated_bytes_across_clips(tmp_path, monke
 
     with pytest.raises(ValueError, match="disk space"):
         service.enqueue_compile(CompileRequest(collection_id="films"))
+
+    assert db.connection.execute("SELECT count(*) FROM jobs").fetchone()[0] == 0
+    states = [row[0] for row in db.connection.execute("SELECT state FROM clips").fetchall()]
+    assert states == ["discovered", "discovered"]
+
+
+def test_compile_strategies_filter_states_and_busy_skip(tmp_path):
+    db, _resolver, service = _configured_service(tmp_path)
+    first = service.enqueue_compile(CompileRequest(collection_id="films"))[0]
+    state = db.connection.execute("SELECT state FROM clips").fetchone()[0]
+    assert state == "pending"
+
+    skipped = service.enqueue_compile(
+        CompileRequest(collection_id="films", skip_if_processing=True)
+    )
+    assert [job.id for job in skipped] == [first.id]
+
+    with db.connection:
+        db.connection.execute("UPDATE jobs SET state='failed' WHERE id=?", (first.id,))
+        db.connection.execute("UPDATE clips SET state='failed'")
+        db.connection.execute("UPDATE clips SET state='ready', output_available=0")
+    assert (
+        service.enqueue_compile(
+            CompileRequest(collection_id="films", strategy="compile_stale_only")
+        )
+        == []
+    )
+    with db.connection:
+        db.connection.execute("UPDATE clips SET state='failed'")
+    retried = service.enqueue_compile(
+        CompileRequest(collection_id="films", strategy="compile_stale_only")
+    )
+    assert len(retried) == 1
+
+
+def test_scan_only_strategy_queues_no_ffmpeg_job(tmp_path):
+    db, _resolver, service = _configured_service(tmp_path)
+
+    jobs = service.enqueue_compile(CompileRequest(collection_id="films", strategy="scan_only"))
+
+    assert len(jobs) == 1 and jobs[0].kind == "scan"
+    assert (
+        db.connection.execute("SELECT count(*) FROM jobs WHERE kind='compile'").fetchone()[0] == 0
+    )
+
+
+def test_asset_changes_materially_change_the_compile_fingerprint(tmp_path):
+    db, resolver, service = _configured_service(tmp_path)
+    asset = resolver.resolve("assets", "intro.mp4")
+    asset.write_bytes(b"intro-v1")
+    profile = ProcessingProfile(intro_reference="intro.mp4").model_dump(mode="json")
+    with db.connection:
+        db.connection.execute("UPDATE profiles SET settings=?", (json.dumps(profile),))
+
+    first = service.enqueue_compile(
+        CompileRequest(collection_id="films", skip_if_processing=False)
+    )[0]
+    with db.connection:
+        db.connection.execute("UPDATE jobs SET state='failed' WHERE id=?", (first.id,))
+        db.connection.execute("UPDATE clips SET state='failed'")
+    asset.write_bytes(b"intro-v2")
+    second = service.enqueue_compile(
+        CompileRequest(collection_id="films", skip_if_processing=False)
+    )[0]
+
+    assert first.profile_fingerprint != second.profile_fingerprint
+    assert first.fingerprint != second.fingerprint

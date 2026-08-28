@@ -1,11 +1,22 @@
+import pytest
 from cinema_collections_worker.database import Database
 from cinema_collections_worker.domain import CollectionCreate, ProfileCreate
-from cinema_collections_worker.repositories import CollectionRepository, ProfileRepository
+from cinema_collections_worker.profile_validation import ProcessingProfile
+from cinema_collections_worker.repositories import (
+    CollectionRepository,
+    ProfileRepository,
+    ResourceNotFound,
+)
 
 
 def test_collections_are_persistent_and_ids_are_unique(tmp_path):
     path = str(tmp_path / "worker.sqlite3")
     db = Database.create(path)
+    ProfileRepository(db).create(
+        ProfileCreate(id="default", name="Default", settings={}),
+        actor="test",
+        request_id="profile",
+    )
     repo = CollectionRepository(db)
     created = repo.create(
         CollectionCreate(
@@ -36,6 +47,9 @@ def test_collections_are_persistent_and_ids_are_unique(tmp_path):
 
 def test_only_one_default_collection_is_allowed(tmp_path):
     db = Database.create(str(tmp_path / "worker.sqlite3"))
+    ProfileRepository(db).create(
+        ProfileCreate(id="p", name="P", settings={}), actor="a", request_id="profile"
+    )
     repo = CollectionRepository(db)
     repo.create(
         CollectionCreate(
@@ -53,14 +67,55 @@ def test_only_one_default_collection_is_allowed(tmp_path):
     )
     assert second.is_default is True
     assert repo.get("one").is_default is False
+    assert repo.get("one").revision == 2
+    actions = [
+        row[0]
+        for row in db.connection.execute(
+            "SELECT action_type FROM audit_events ORDER BY id"
+        ).fetchall()
+    ]
+    assert "collection.default_demoted" in actions
 
 
 def test_profile_version_increments_on_patch(tmp_path):
     db = Database.create(str(tmp_path / "worker.sqlite3"))
     repo = ProfileRepository(db)
-    profile = repo.create(
-        ProfileCreate(id="p", name="P", settings={"x": 1}), actor="a", request_id="1"
+    profile = repo.create(ProfileCreate(id="p", name="P", settings={}), actor="a", request_id="1")
+    updated = repo.patch(
+        "p",
+        profile.revision,
+        {"settings": {"video": {"width": 1920, "height": 1080}}},
+        actor="a",
+        request_id="2",
     )
-    updated = repo.patch("p", profile.revision, {"settings": {"x": 2}}, actor="a", request_id="2")
     assert updated.version == 2
     assert updated.revision == 2
+
+
+def test_profiles_are_canonicalized_and_collection_references_must_exist(tmp_path):
+    db = Database.create(str(tmp_path / "worker.sqlite3"))
+    profiles = ProfileRepository(db)
+    created = profiles.create(
+        ProfileCreate(
+            id="profile",
+            name="Profile",
+            settings={"output": {"extension": ".mp4"}},
+        ),
+        actor="test",
+        request_id="profile",
+    )
+    assert created.settings == ProcessingProfile().model_dump(mode="json")
+
+    with pytest.raises(ValueError):
+        ProfileCreate(id="unsafe", name="Unsafe", settings={"raw_filter": "movie=bad"})
+    with pytest.raises(ResourceNotFound, match="missing-profile"):
+        CollectionRepository(db).create(
+            CollectionCreate(
+                id="films",
+                name="Films",
+                source_directory="films",
+                processing_profile_id="missing-profile",
+            ),
+            actor="test",
+            request_id="collection",
+        )

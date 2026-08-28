@@ -41,6 +41,14 @@ SENSOR_DESCRIPTIONS: tuple[CinemaCollectionsSensorDescription, ...] = (
         native_unit_of_measurement="%",
     ),
     CinemaCollectionsSensorDescription(key="worker_version", translation_key="worker_version"),
+    CinemaCollectionsSensorDescription(key="next_schedule", translation_key="next_schedule"),
+    CinemaCollectionsSensorDescription(
+        key="collection_priorities", translation_key="collection_priorities"
+    ),
+    CinemaCollectionsSensorDescription(
+        key="compilation_summary", translation_key="compilation_summary"
+    ),
+    CinemaCollectionsSensorDescription(key="clip_states", translation_key="clip_states"),
 )
 
 
@@ -97,6 +105,14 @@ class CinemaCollectionsSensor(CoordinatorEntity[CinemaCollectionsCoordinator], S
                 return percent if isinstance(percent, (int, float)) else None
             case "worker_version":
                 return snapshot.health.worker_version if snapshot.health is not None else None
+            case "next_schedule":
+                return snapshot.next_schedule.isoformat() if snapshot.next_schedule else None
+            case "collection_priorities":
+                return len(snapshot.priorities)
+            case "compilation_summary":
+                return snapshot.compilation_summary
+            case "clip_states":
+                return sum(snapshot.clip_states.values())
             case _:
                 return None
 
@@ -113,6 +129,12 @@ class CinemaCollectionsSensor(CoordinatorEntity[CinemaCollectionsCoordinator], S
                 dict(snapshot.compatibility) if snapshot.compatibility is not None else None
             ),
             "worker_error": snapshot.error,
+            "next_schedule": (
+                snapshot.next_schedule.isoformat() if snapshot.next_schedule else None
+            ),
+            "collection_priorities": dict(snapshot.priorities),
+            "compilation_summary": snapshot.compilation_summary,
+            "clip_states": dict(snapshot.clip_states),
         }
         if snapshot.status is not None and snapshot.status.current_job is not None:
             attributes["current_job"] = dict(snapshot.status.current_job)

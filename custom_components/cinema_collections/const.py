@@ -6,9 +6,17 @@ DOMAIN = "cinema_collections"
 
 CONF_ENDPOINT = "endpoint"
 CONF_TOKEN = "token"
+CONF_MEDIA_URI_PREFIX = "media_uri_prefix"
 CONF_OVERRIDE_MODE = "override_mode"
 CONF_OVERRIDE_COLLECTION_ID = "override_collection_id"
+CONF_HISTORY_RESET_TIME = "history_reset_time"
+CONF_SYNC_ON_STARTUP = "sync_on_startup"
 CONF_SCHEDULE_RUN_TOKENS = "schedule_run_tokens"
+
+DEFAULT_MEDIA_URI_PREFIX = "media-source://media_source/local/cinema-collections/compiled"
+DEFAULT_HISTORY_RESET_TIME = "00:00"
+DEFAULT_SYNC_ON_STARTUP = True
+MAX_SCHEDULE_RUN_TOKENS = 512
 
 SUBENTRY_COLLECTION = "collection"
 SUBENTRY_PROFILE = "profile"

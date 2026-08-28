@@ -1,3 +1,2 @@
 #!/usr/bin/with-contenv bashio
-# The container runs as the unprivileged abc account declared in Dockerfile.
 exec python3 -m cinema_collections_worker.main

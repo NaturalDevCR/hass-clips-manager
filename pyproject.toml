@@ -45,7 +45,7 @@ extend-exclude = [".venv", "build", "dist"]
 select = ["E", "F", "I", "UP", "B", "SIM"]
 
 [tool.pyright]
-include = ["cinema_collections_worker", "custom_components/cinema_collections"]
+include = ["app/src/cinema_collections_worker", "custom_components/cinema_collections"]
 typeCheckingMode = "strict"
 pythonVersion = "3.13"
 venvPath = "."

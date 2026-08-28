@@ -177,7 +177,7 @@ def test_restore_failure_rolls_back_all_files_and_leaves_trash_active(
     assert record["status"] == "active" and record["restored_at"] is None
 
 
-def test_permanent_delete_failure_keeps_durable_pending_request_and_audit(
+def test_permanent_delete_cleanup_failure_keeps_only_inaccessible_staged_residue(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     db, manager, _source, compiled = _manager(tmp_path)
@@ -185,27 +185,56 @@ def test_permanent_delete_failure_keeps_durable_pending_request_and_audit(
     original_unlink = Path.unlink
 
     def fail_output_unlink(path: Path, *args: object, **kwargs: object) -> None:
-        if path == output:
+        if path.name == "output.mp4" and ".permanent-delete" in path.parts:
             raise OSError("injected output unlink failure")
         original_unlink(path, *args, **kwargs)
 
     monkeypatch.setattr(Path, "unlink", fail_output_unlink)
     token = manager.delete_confirmation_token(clip.id, DeleteTarget.BOTH)
 
-    with pytest.raises(OSError, match="injected output unlink failure"):
-        manager.permanently_delete(str(clip.id), DeleteTarget.BOTH, token)
+    event = manager.permanently_delete(str(clip.id), DeleteTarget.BOTH, token)
 
     request = db.connection.execute(
         "SELECT state, failure FROM lifecycle_requests WHERE clip_id=?", (str(clip.id),)
     ).fetchone()
-    assert request["state"] == "failed" and "injected" in request["failure"]
-    assert output.exists()
+    assert request["state"] == "completed_with_residue" and "injected" in request["failure"]
+    assert event.details["cleanup_pending"] is True
+    assert not output.exists()
     assert (
         db.connection.execute(
             "SELECT count(*) FROM audit_events WHERE action_type='library.permanent_delete.pending'"
         ).fetchone()[0]
         == 1
     )
+
+
+def test_permanent_delete_both_compensates_if_second_target_cannot_be_staged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db, manager, source, compiled = _manager(tmp_path)
+    clip, output = _clip_with_output(db, manager, compiled)
+    source_path = source / "films" / "one.mp4"
+    original_move = manager._move_exact
+    staged_moves = 0
+
+    def fail_second_stage(source_file: Path, destination: Path) -> None:
+        nonlocal staged_moves
+        if ".permanent-delete" in destination.parts:
+            staged_moves += 1
+            if staged_moves == 2:
+                raise OSError("injected second staging failure")
+        original_move(source_file, destination)
+
+    monkeypatch.setattr(manager, "_move_exact", fail_second_stage)
+    token = manager.delete_confirmation_token(clip.id, DeleteTarget.BOTH)
+
+    with pytest.raises(OSError, match="second staging failure"):
+        manager.permanently_delete(str(clip.id), DeleteTarget.BOTH, token)
+
+    assert source_path.read_bytes() == b"source"
+    assert output.read_bytes() == b"output"
+    row = db.connection.execute("SELECT state FROM clips WHERE id=?", (str(clip.id),)).fetchone()
+    assert row["state"] == "discovered"
 
 
 @pytest.mark.parametrize(

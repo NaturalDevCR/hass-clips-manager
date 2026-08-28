@@ -12,6 +12,7 @@ from custom_components.cinema_collections.selection import (
     ClipAvailability,
     SelectionService,
     SelectRequest,
+    build_media_uri,
 )
 
 
@@ -98,6 +99,27 @@ async def test_service_uses_only_current_ready_worker_clips_and_returns_media_de
     assert response.media_uri == "media-source://media_source/local/films/ready.mp4"
     assert response.duration_seconds == 42.5
     assert response.history_reset is False
+
+
+@pytest.mark.asyncio
+async def test_selection_maps_worker_output_below_configured_media_prefix(
+    hass: object,
+) -> None:
+    service = await make_service(
+        hass,
+        (clip("clip-a", output_path="films/Feature & Trailer.mp4"),),
+        "selection-media-prefix",
+    )
+    service._media_uri_builder = lambda path: build_media_uri(  # noqa: SLF001
+        "media-source://media_source/local/cinema-collections/compiled", path
+    )
+
+    response = await service.async_select(SelectRequest(collection_id="films"))
+
+    assert response.media_uri == (
+        "media-source://media_source/local/cinema-collections/compiled/"
+        "films/Feature%20%26%20Trailer.mp4"
+    )
 
 
 @pytest.mark.asyncio

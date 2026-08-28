@@ -10,6 +10,19 @@ from test_openapi_schema import EXPECTED_ROUTES
 
 CONTRACT_PATH = Path(__file__).parents[2] / "contract" / "openapi-v1.yaml"
 
+_STRONG_TOKEN = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFG"
+
+
+def _settings(tmp_path: Path) -> WorkerSettings:
+    return WorkerSettings(
+        bearer_secret=SecretStr(_STRONG_TOKEN),
+        data_dir=tmp_path,
+        database_path=tmp_path / "worker.sqlite3",
+        log_dir=tmp_path / "logs",
+        temp_dir=tmp_path / RootKey.TEMP.value,
+        roots={key: tmp_path / key.value for key in RootKey},
+    )
+
 
 def _reference_name(value: dict) -> str | None:
     reference = value.get("$ref")
@@ -22,14 +35,7 @@ def _parameter(schema: dict, value: dict) -> dict:
 
 
 def test_fastapi_routes_conform_to_declared_worker_contract(tmp_path: Path) -> None:
-    settings = WorkerSettings(
-        bearer_secret=SecretStr("test-token"),
-        data_dir=tmp_path,
-        database_path=tmp_path / "worker.sqlite3",
-        log_dir=tmp_path / "logs",
-        temp_dir=tmp_path / "tmp",
-        roots={key: tmp_path / key.value for key in RootKey},
-    )
+    settings = _settings(tmp_path)
     app = create_app(settings)
     client = TestClient(app)
 
@@ -41,22 +47,15 @@ def test_fastapi_routes_conform_to_declared_worker_contract(tmp_path: Path) -> N
     }
     assert actual == EXPECTED_ROUTES
 
-    health = client.get("/api/v1/health", headers={"Authorization": "Bearer test-token"})
+    health = client.get("/api/v1/health", headers={"Authorization": f"Bearer {_STRONG_TOKEN}"})
     assert health.status_code == 200
-    status = client.get("/api/v1/status", headers={"Authorization": "Bearer test-token"})
+    status = client.get("/api/v1/status", headers={"Authorization": f"Bearer {_STRONG_TOKEN}"})
     assert status.status_code == 200
     assert {"queue_depth", "current_job", "storage", "scans", "latest_errors"} <= set(status.json())
 
 
 def test_runtime_openapi_preserves_contract_security_bodies_and_responses(tmp_path: Path) -> None:
-    settings = WorkerSettings(
-        bearer_secret=SecretStr("test-token"),
-        data_dir=tmp_path,
-        database_path=tmp_path / "worker.sqlite3",
-        log_dir=tmp_path / "logs",
-        temp_dir=tmp_path / "tmp",
-        roots={key: tmp_path / key.value for key in RootKey},
-    )
+    settings = _settings(tmp_path)
     contract = json.loads(CONTRACT_PATH.read_text(encoding="utf-8"))
     runtime = create_app(settings).openapi()
 

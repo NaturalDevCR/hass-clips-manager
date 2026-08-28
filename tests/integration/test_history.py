@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, time, timedelta
 
 import pytest
 from homeassistant.helpers.storage import Store
@@ -109,6 +109,25 @@ async def test_daily_reset_handler_starts_a_new_round_at_local_midnight(hass: ob
     assert result.collection_ids == ("films",)
     assert selected.clip_id == "clip-a"
     assert selected.history_reset is True
+
+
+@pytest.mark.asyncio
+async def test_configured_daily_reset_uses_its_local_boundary(hass: object) -> None:
+    clock = Clock(datetime(2026, 8, 27, 5, 30, tzinfo=dt_util.DEFAULT_TIME_ZONE))
+    history = PlaybackHistoryStore(
+        hass,  # type: ignore[arg-type]
+        storage_key="custom-reset",
+        now=clock.now,
+        chooser=choose_first,
+        reset_time=time(6, 0),
+    )
+    await history.async_setup()
+    await history.async_select("films", ("clip-a",), dry_run=False)
+
+    clock.value = datetime(2026, 8, 27, 6, 0, tzinfo=dt_util.DEFAULT_TIME_ZONE)
+    result = await history.async_handle_daily_reset(clock.now())
+
+    assert result.collection_ids == ("films",)
 
 
 @pytest.mark.asyncio

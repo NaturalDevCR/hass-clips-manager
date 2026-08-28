@@ -1,5 +1,5 @@
 ARG BUILD_ARCH=amd64
-FROM ghcr.io/home-assistant/${BUILD_ARCH}-base:3.21
+FROM ghcr.io/home-assistant/${BUILD_ARCH}-base:3.20
 
 RUN apk add --no-cache ffmpeg python3 py3-pip \
     && python3 -m pip install --no-cache-dir --break-system-packages \
@@ -9,11 +9,10 @@ COPY src /opt/cinema-collections-worker/src
 COPY rootfs /
 
 ENV PYTHONPATH=/opt/cinema-collections-worker/src
-ENV CINEMA_COLLECTIONS_OPTIONS=/data/options.yaml
+ENV CINEMA_COLLECTIONS_OPTIONS=/data/options.json
 
 RUN chmod 0755 /usr/bin/cinema-collections-worker
 
-# Home Assistant's base image provides the unprivileged abc account.  The
-# Supervisor owns mounting /data and /media; no host port is published.
-USER abc
+# The Home Assistant base image owns process supervision and the permissions of
+# Supervisor-mounted /data and /media. No host port is published by the App.
 CMD ["/usr/bin/cinema-collections-worker"]

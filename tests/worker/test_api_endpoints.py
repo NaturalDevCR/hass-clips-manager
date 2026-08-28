@@ -1,6 +1,7 @@
 # ruff: noqa: E501
 
 import json
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -11,21 +12,82 @@ from cinema_collections_worker.settings import WorkerSettings
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
+_TOKEN = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFG"
+
 
 def _client(tmp_path: Path) -> TestClient:
     settings = WorkerSettings(
-        bearer_secret=SecretStr("test-token"),
+        bearer_secret=SecretStr(_TOKEN),
         data_dir=tmp_path,
         database_path=tmp_path / "worker.sqlite3",
         log_dir=tmp_path / "logs",
-        temp_dir=tmp_path / "tmp",
+        temp_dir=tmp_path / RootKey.TEMP.value,
         roots={key: tmp_path / key.value for key in RootKey},
     )
     return TestClient(create_app(settings))
 
 
 def _headers(key: str = "request-1") -> dict[str, str]:
-    return {"Authorization": "Bearer test-token", "Idempotency-Key": key}
+    return {"Authorization": f"Bearer {_TOKEN}", "Idempotency-Key": key}
+
+
+def _wait_for_job(client: TestClient, job_id: str, state: str, timeout: float = 2.0) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        row = client.app.state.database.connection.execute(
+            "SELECT state FROM jobs WHERE id=?", (job_id,)
+        ).fetchone()
+        if row is not None and row["state"] == state:
+            return
+        time.sleep(0.01)
+    raise AssertionError(f"job {job_id} did not reach {state}")
+
+
+def test_application_lifespan_recovers_and_consumes_running_jobs(tmp_path: Path) -> None:
+    app = create_app(
+        WorkerSettings(
+            bearer_secret=SecretStr(_TOKEN),
+            data_dir=tmp_path,
+            database_path=tmp_path / "worker.sqlite3",
+            log_dir=tmp_path / "logs",
+            temp_dir=tmp_path / RootKey.TEMP.value,
+            roots={key: tmp_path / key.value for key in RootKey},
+        )
+    )
+    job_id = "00000000-0000-0000-0000-000000000099"
+    with app.state.database.connection:
+        app.state.database.connection.execute(
+            "INSERT INTO jobs(id,kind,state,progress,created_at,collection_id,clip_id,"
+            "fingerprint,payload,attempt,max_attempts,cancel_requested) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                job_id,
+                "cleanup",
+                "running",
+                json.dumps({"stage": "encoding", "percent": 1, "eta_seconds": None}),
+                datetime.now(UTC).isoformat(),
+                "system",
+                job_id,
+                "startup-recovery",
+                json.dumps(
+                    {
+                        "source_relative_path": f"cleanup/{job_id}.request",
+                        "output_relative_path": f"cleanup/{job_id}.result",
+                        "source_fingerprint": "request",
+                        "profile_fingerprint": "request",
+                        "profile_settings": {},
+                        "duration_seconds": 0,
+                        "logs": [],
+                    }
+                ),
+                1,
+                3,
+                0,
+            ),
+        )
+
+    with TestClient(app) as client:
+        _wait_for_job(client, job_id, "succeeded")
 
 
 def _create_profile_and_collection(client: TestClient) -> None:
@@ -104,7 +166,7 @@ def test_scan_compile_and_cancellation_are_accepted_as_jobs(tmp_path: Path) -> N
             (
                 "00000000-0000-0000-0000-000000000003",
                 "films",
-                "discovered",
+                "stale",
                 "films/clip.mp4",
                 "films/clip.mp4",
                 3.0,
@@ -114,7 +176,9 @@ def test_scan_compile_and_cancellation_are_accepted_as_jobs(tmp_path: Path) -> N
             ),
         )
     compile_response = client.post(
-        "/api/v1/compile", headers=_headers("compile"), json={"collection_id": "films"}
+        "/api/v1/compile",
+        headers=_headers("compile"),
+        json={"collection_id": "films", "strategy": "compile_stale_only"},
     )
     assert compile_response.status_code == 202
     job_id = compile_response.json()["id"]
@@ -176,6 +240,9 @@ def test_clip_output_availability_and_paginated_lookups(tmp_path: Path) -> None:
                 datetime.now(UTC).isoformat(),
             ),
         )
+    output = client.app.state.resolver.resolve("compiled", "films/out.mp4")
+    output.parent.mkdir(parents=True)
+    output.write_bytes(b"ready")
 
     page = client.get("/api/v1/clips?page=1&page_size=25", headers=_headers())
     found = client.get(f"/api/v1/clips/{clip_id}", headers=_headers())
@@ -184,3 +251,67 @@ def test_clip_output_availability_and_paginated_lookups(tmp_path: Path) -> None:
     assert page.status_code == 200 and page.json()["total"] == 1
     assert found.status_code == 200 and found.json()["output_available"] is True
     assert missing.status_code == 404 and missing.json()["code"] == "not_found"
+
+
+def test_clip_lookup_downgrades_a_missing_compiled_output_live(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    _create_profile_and_collection(client)
+    clip_id = "00000000-0000-0000-0000-000000000091"
+    with client.app.state.database.connection:
+        client.app.state.database.connection.execute(
+            "INSERT INTO clips(id, collection_id, state, relative_source_path, relative_output_path, "
+            "duration_seconds, output_available, metadata, updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
+            (
+                clip_id,
+                "films",
+                "ready",
+                "films/in.mp4",
+                "films/missing.mp4",
+                3.0,
+                1,
+                "{}",
+                datetime.now(UTC).isoformat(),
+            ),
+        )
+
+    found = client.get(f"/api/v1/clips/{clip_id}", headers=_headers())
+    persisted = client.app.state.database.connection.execute(
+        "SELECT state, output_available FROM clips WHERE id=?", (clip_id,)
+    ).fetchone()
+
+    assert found.status_code == 200
+    assert found.json()["output_available"] is False
+    assert found.json()["state"] == "stale"
+    assert tuple(persisted) == ("stale", 0)
+
+
+def test_built_in_compatibility_profile_is_seeded(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+
+    response = client.get("/api/v1/profiles", headers=_headers())
+
+    assert response.status_code == 200
+    built_in = next(
+        item for item in response.json()["items"] if item["id"] == "compatibility-4k-loudness"
+    )
+    assert built_in["settings"] == ProcessingProfile().model_dump(mode="json")
+
+
+def test_lifespan_scan_persists_sanitized_status_and_logs(tmp_path: Path) -> None:
+    with _client(tmp_path) as client:
+        _create_profile_and_collection(client)
+        response = client.post(
+            "/api/v1/scan",
+            headers=_headers("observable-scan"),
+            json={"collection_ids": ["films"]},
+        )
+        assert response.status_code == 202
+        _wait_for_job(client, response.json()["id"], "succeeded")
+
+        status = client.get("/api/v1/status", headers=_headers()).json()
+        logs = client.get("/api/v1/logs", headers=_headers()).json()
+
+    assert status["scans"]["last_scan"]["collection_ids"] == ["films"]
+    assert logs["total"] >= 1
+    rendered = json.dumps(logs)
+    assert str(tmp_path) not in rendered

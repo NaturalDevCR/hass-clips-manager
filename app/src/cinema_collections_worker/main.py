@@ -14,7 +14,7 @@ from .settings import Settings
 def main() -> None:
     """Start the Worker using an explicitly supplied options file."""
 
-    options_path = Path(os.environ.get("CINEMA_COLLECTIONS_OPTIONS", "/data/options.yaml"))
+    options_path = Path(os.environ.get("CINEMA_COLLECTIONS_OPTIONS", "/data/options.json"))
     settings = Settings.load(options_path)
     uvicorn.run(create_app(settings), host=settings.bind_host, port=settings.bind_port)
 

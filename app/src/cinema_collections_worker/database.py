@@ -5,27 +5,89 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
+import uuid
+from collections.abc import Generator
+from contextlib import contextmanager
 from pathlib import Path
 
 
 class Database:
-    def __init__(self, connection: sqlite3.Connection) -> None:
-        self.connection = connection
+    def __init__(self, url: str) -> None:
+        self._local = threading.local()
+        self._connections: set[sqlite3.Connection] = set()
+        self._connections_lock = threading.Lock()
+        self._uri = url == ":memory:"
+        self._dsn = (
+            f"file:cinema-collections-{uuid.uuid4().hex}?mode=memory&cache=shared"
+            if self._uri
+            else url
+        )
+        # A shared in-memory database survives as long as this keeper remains
+        # open. The creating thread uses it as its own thread-local connection.
+        if self._uri:
+            keeper = self._new_connection()
+            self._local.connection = keeper
 
     @classmethod
     def create(cls, url: str) -> Database:
         if url != ":memory:":
             Path(url).parent.mkdir(parents=True, exist_ok=True)
-        # FastAPI executes synchronous route handlers in its worker thread
-        # pool.  The Worker owns this one connection and its repositories use
-        # transactional statements, so it must be usable by those handlers.
-        conn = sqlite3.connect(url, check_same_thread=False)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys = ON")
-        conn.execute("PRAGMA journal_mode = WAL")
-        db = cls(conn)
+        db = cls(url)
         db._migrate()
         return db
+
+    def _new_connection(self) -> sqlite3.Connection:
+        connection = sqlite3.connect(
+            self._dsn,
+            uri=self._uri,
+            timeout=30,
+            # Connections are never shared for queries, but allowing the owner
+            # to close all thread-local handles enables graceful app shutdown.
+            check_same_thread=False,
+        )
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute("PRAGMA busy_timeout = 30000")
+        if not self._uri:
+            connection.execute("PRAGMA journal_mode = WAL")
+        with self._connections_lock:
+            self._connections.add(connection)
+        return connection
+
+    @property
+    def connection(self) -> sqlite3.Connection:
+        connection = getattr(self._local, "connection", None)
+        if connection is None:
+            connection = self._new_connection()
+            self._local.connection = connection
+        return connection
+
+    @contextmanager
+    def transaction(self) -> Generator[sqlite3.Connection]:
+        """Serialize a transaction per thread and preserve nested atomicity."""
+
+        connection = self.connection
+        depth = int(getattr(self._local, "transaction_depth", 0))
+        if depth == 0:
+            connection.execute("BEGIN IMMEDIATE")
+            self._local.rollback_only = False
+        self._local.transaction_depth = depth + 1
+        try:
+            yield connection
+        except Exception:
+            self._local.rollback_only = True
+            raise
+        finally:
+            self._local.transaction_depth = depth
+            if depth == 0:
+                try:
+                    if bool(getattr(self._local, "rollback_only", False)):
+                        connection.rollback()
+                    else:
+                        connection.commit()
+                finally:
+                    self._local.rollback_only = False
 
     def _migrate(self) -> None:
         self.connection.execute(
@@ -140,9 +202,33 @@ class Database:
             """)
             self.connection.execute("INSERT INTO schema_migrations VALUES (5, datetime('now'))")
             self.connection.commit()
+        if not self.connection.execute(
+            "SELECT 1 FROM schema_migrations WHERE version=6"
+        ).fetchone():
+            self.connection.executescript("""
+                CREATE TABLE worker_logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL,
+                    level TEXT NOT NULL,
+                    message TEXT NOT NULL,
+                    job_id TEXT
+                );
+                CREATE INDEX worker_logs_timestamp_index ON worker_logs(timestamp DESC, id DESC);
+                CREATE TABLE worker_status (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+            """)
+            self.connection.execute("INSERT INTO schema_migrations VALUES (6, datetime('now'))")
+            self.connection.commit()
 
     def close(self) -> None:
-        self.connection.close()
+        with self._connections_lock:
+            connections = tuple(self._connections)
+            self._connections.clear()
+        for connection in connections:
+            connection.close()
 
     @property
     def conn(self) -> sqlite3.Connection:

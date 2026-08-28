@@ -8,15 +8,34 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - build_arch: amd64
+            platform: linux/amd64
+          - build_arch: arm64
+            platform: linux/arm64
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
+      - name: Log in to GitHub Container Registry
+        if: github.event_name == 'push'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       - uses: docker/build-push-action@v6
         with:
-          context: .
-          file: Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: cinema-collections/worker:latest
-
+          context: app
+          file: app/Dockerfile
+          platforms: ${{ matrix.platform }}
+          build-args: BUILD_ARCH=${{ matrix.build_arch }}
+          push: ${{ github.event_name == 'push' }}
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/cinema-collections-worker:${{ matrix.build_arch }}
+            ghcr.io/${{ github.repository_owner }}/cinema-collections-worker:${{ github.sha }}-${{ matrix.build_arch }}
+          labels: |
+            org.opencontainers.image.source=${{ github.repositoryUrl }}
+            org.opencontainers.image.revision=${{ github.sha }}

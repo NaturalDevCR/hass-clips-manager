@@ -6,7 +6,8 @@
         "description": "Ingresa el endpoint privado del Worker y el token bearer.",
         "data": {
           "endpoint": "Endpoint del Worker",
-          "token": "Token bearer"
+          "token": "Token bearer",
+          "media_uri_prefix": "URI del directorio multimedia compilado"
         }
       }
     },
@@ -27,7 +28,9 @@
         "description": "Elige si la selección sigue la política, usa la colección predeterminada o usa una colección permitida.",
         "data": {
           "override_mode": "Modo de selección",
-          "override_collection_id": "Colección para el modo explícito"
+          "override_collection_id": "Colección para el modo explícito",
+          "history_reset_time": "Hora diaria de reinicio del historial",
+          "sync_on_startup": "Sincronizar configuración al iniciar"
         }
       }
     },
@@ -118,7 +121,11 @@
       "queue_depth": {"name": "Profundidad de cola"},
       "latest_error": {"name": "Último error del Worker"},
       "current_job_progress": {"name": "Progreso del trabajo actual"},
-      "worker_version": {"name": "Versión del Worker"}
+      "worker_version": {"name": "Versión del Worker"},
+      "next_schedule": {"name": "Próxima programación de compilación"},
+      "collection_priorities": {"name": "Prioridades de colección"},
+      "compilation_summary": {"name": "Resumen de compilación"},
+      "clip_states": {"name": "Estados de clips"}
     },
     "button": {
       "scan_library": {"name": "Escanear biblioteca"},

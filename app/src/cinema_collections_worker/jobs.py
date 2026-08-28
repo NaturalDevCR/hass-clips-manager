@@ -15,7 +15,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Protocol, cast
+from typing import Any, Literal, Protocol, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -26,6 +26,7 @@ from .paths import RootKey, SafePathResolver, validate_collection_id, validate_r
 from .probe import MediaProbeResult, ProbeClient
 from .profile_validation import ProcessingProfile, profile_fingerprint, validate_profile
 from .queue import PersistentJobQueue
+from .sanitization import sanitize_message
 
 
 class JobState(StrEnum):
@@ -61,7 +62,9 @@ class CompileRequest(BaseModel):
 
     collection_id: str
     clip_ids: list[str] | None = None
-    strategy: str = "scan_and_compile_changed_or_missing"
+    strategy: Literal["scan_and_compile_changed_or_missing", "compile_stale_only", "scan_only"] = (
+        "scan_and_compile_changed_or_missing"
+    )
     skip_if_processing: bool = True
     max_attempts: int = Field(default=3, ge=1, le=10)
 
@@ -96,6 +99,8 @@ class JobRecord(BaseModel):
     intro_duration_seconds: float = Field(default=0, ge=0)
     outro_duration_seconds: float = Field(default=0, ge=0)
     has_audio: bool = True
+    intro_has_audio: bool = True
+    outro_has_audio: bool = True
     attempt: int = Field(default=0, ge=0)
     max_attempts: int = Field(default=3, ge=1)
     cancel_requested: bool = False
@@ -148,15 +153,25 @@ class JobService:
         *,
         disk_reserve_bytes: int = 1_073_741_824,
         queue: PersistentJobQueue | None = None,
+        catalog: CatalogService | None = None,
     ) -> None:
         self.db = db
         self.resolver = resolver
         self.disk_reserve_bytes = disk_reserve_bytes
         self.queue = queue or PersistentJobQueue(db)
+        self.catalog = catalog
 
     @staticmethod
     def available_disk_bytes(path: Path) -> int:
         return shutil.disk_usage(path).free
+
+    @staticmethod
+    def _file_fingerprint(path: Path) -> str:
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            for block in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(block)
+        return digest.hexdigest()
 
     def _profile(self, collection_id: str) -> tuple[dict[str, Any], str]:
         row = self.db.connection.execute(
@@ -167,11 +182,39 @@ class JobService:
             raise KeyError(collection_id)
         settings = json.loads(row["settings"])
         profile = validate_profile(ProcessingProfile.model_validate(settings))
-        return profile.model_dump(mode="json"), profile_fingerprint(profile, {})
+        intro = (
+            self._file_fingerprint(
+                self.resolver.resolve(RootKey.ASSETS.value, profile.intro_reference)
+            )
+            if profile.intro_reference
+            else None
+        )
+        outro = (
+            intro
+            if profile.outro_reference == profile.intro_reference
+            else (
+                self._file_fingerprint(
+                    self.resolver.resolve(RootKey.ASSETS.value, profile.outro_reference)
+                )
+                if profile.outro_reference
+                else None
+            )
+        )
+        return profile.model_dump(mode="json"), profile_fingerprint(
+            profile, {"intro_fingerprint": intro, "outro_fingerprint": outro}
+        )
 
     def _eligible_clips(self, request: CompileRequest) -> list[Any]:
-        sql = "SELECT * FROM clips WHERE collection_id=? AND state NOT IN ('invalid','deleted')"
-        args: list[Any] = [request.collection_id]
+        eligible_states = (
+            ("stale", "failed")
+            if request.strategy == "compile_stale_only"
+            else ("discovered", "stale", "failed")
+        )
+        if not request.skip_if_processing:
+            eligible_states = (*eligible_states, "pending", "compiling")
+        placeholders = ",".join("?" for _ in eligible_states)
+        sql = f"SELECT * FROM clips WHERE collection_id=? AND state IN ({placeholders})"
+        args: list[Any] = [request.collection_id, *eligible_states]
         if request.clip_ids is not None:
             if not request.clip_ids:
                 return []
@@ -181,6 +224,29 @@ class JobService:
         return self.db.connection.execute(sql, args).fetchall()
 
     def enqueue_compile(self, request: CompileRequest) -> list[JobRecord]:
+        if request.strategy == "scan_only":
+            job_id = str(uuid.uuid4())
+            scan_job = JobRecord(
+                id=job_id,
+                kind="scan",
+                collection_id="system",
+                clip_id=job_id,
+                source_relative_path=f"scan/{job_id}.request",
+                output_relative_path=f"scan/{job_id}.result",
+                source_fingerprint="compile-request",
+                profile_fingerprint="compile-request",
+                profile_settings={"collection_ids": [request.collection_id]},
+                duration_seconds=0,
+            )
+            return [self.queue.enqueue(scan_job)]
+        active = self.db.connection.execute(
+            "SELECT id FROM jobs WHERE kind='compile' AND state IN ('queued','running') "
+            "ORDER BY created_at, id LIMIT 1"
+        ).fetchone()
+        if active is not None and request.skip_if_processing:
+            return [self.queue.get(str(active["id"]))]
+        if request.strategy == "scan_and_compile_changed_or_missing" and self.catalog is not None:
+            self.catalog.scan({request.collection_id})
         profile_settings, current_profile_fingerprint = self._profile(request.collection_id)
         compiled_root = self.resolver.roots[RootKey.COMPILED]
         try:
@@ -197,8 +263,10 @@ class JobService:
             profile_fingerprint_value = current_profile_fingerprint
             estimated_bytes = int(metadata.get("size_bytes") or 0)
             source_relative = str(clip["relative_source_path"])
+            profile = ProcessingProfile.model_validate(profile_settings)
             output_relative = str(
-                clip["relative_output_path"] or f"{request.collection_id}/{clip['id']}.mp4"
+                clip["relative_output_path"]
+                or f"{request.collection_id}/{clip['id']}.{profile.output.extension}"
             )
             # Resolve once at enqueue time so traversal and out-of-root symlinks
             # cannot be persisted as executable work.
@@ -227,8 +295,8 @@ class JobService:
             if remaining_bytes - estimated_bytes < self.disk_reserve_bytes:
                 raise ValueError("insufficient disk space for compilation")
             remaining_bytes -= estimated_bytes
-            jobs.append(self.queue.enqueue(job))
-        return jobs
+            jobs.append(job)
+        return self.queue.enqueue_many(jobs)
 
     def cancel(self, job_id: str) -> JobRecord:
         return self.queue.request_cancel(job_id)
@@ -275,13 +343,22 @@ class JobWorker:
             else None
         )
 
-        def asset_duration(path: Path | None) -> float:
+        def asset_probe(path: Path | None) -> tuple[float, bool]:
             if path is None:
-                return 0
+                return 0, True
             result = self.probe_client.probe(path)
             if not result.valid:
                 raise ValueError("referenced asset could not be probed")
-            return result.duration_seconds
+            if profile.audio.missing_policy.mode == "required" and not result.has_audio:
+                raise ValueError("referenced asset audio is required by this processing profile")
+            return result.duration_seconds, result.has_audio
+
+        intro_duration, intro_has_audio = asset_probe(intro)
+        outro_duration, outro_has_audio = (
+            (intro_duration, intro_has_audio)
+            if outro is not None and intro is not None and outro == intro
+            else asset_probe(outro)
+        )
 
         return job.model_copy(
             update={
@@ -289,8 +366,10 @@ class JobWorker:
                 "temporary_output_path": temporary_output,
                 "intro_path": intro,
                 "outro_path": outro,
-                "intro_duration_seconds": asset_duration(intro),
-                "outro_duration_seconds": asset_duration(outro),
+                "intro_duration_seconds": intro_duration,
+                "outro_duration_seconds": outro_duration,
+                "intro_has_audio": intro_has_audio,
+                "outro_has_audio": outro_has_audio,
             }
         )
 
@@ -343,17 +422,35 @@ class JobWorker:
             return True
 
     @staticmethod
-    def _terminate_process_group(process: Any) -> None:
+    def _signal_process_group(process: Any, sig: signal.Signals) -> None:
         pid = getattr(process, "pid", None)
         if isinstance(pid, int) and pid > 0:
             try:
-                os.killpg(pid, signal.SIGTERM)
+                os.killpg(pid, sig)
                 return
             except (OSError, ProcessLookupError):
                 pass
-        terminate = getattr(process, "terminate", None)
-        if callable(terminate):
-            terminate()
+        method = getattr(process, "terminate" if sig is signal.SIGTERM else "kill", None)
+        if callable(method):
+            method()
+
+    def _stop_process(self, process: Any) -> str:
+        """TERM, wait, escalate to KILL, and drain bounded process output."""
+
+        self._signal_process_group(process, signal.SIGTERM)
+        captured = ""
+        try:
+            stdout, stderr = process.communicate(timeout=2.0)
+            captured = (stdout or "") + "\n" + (stderr or "")
+            return captured[-16_000:]
+        except (subprocess.TimeoutExpired, TimeoutError):
+            self._signal_process_group(process, signal.SIGKILL)
+        try:
+            stdout, stderr = process.communicate(timeout=2.0)
+            captured = (stdout or "") + "\n" + (stderr or "")
+        except (subprocess.TimeoutExpired, TimeoutError):
+            pass
+        return captured[-16_000:]
 
     def _run_process(
         self, job: JobRecord, command: list[str], timeout_seconds: float
@@ -372,12 +469,12 @@ class JobWorker:
         captured = ""
         while True:
             if self._cancelled(job.id):
-                self._terminate_process_group(process)
-                return False, True, captured
+                captured += self._stop_process(process)
+                return False, True, captured[-16_000:]
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                self._terminate_process_group(process)
-                return False, False, captured + "\nFFmpeg timed out"
+                captured += self._stop_process(process)
+                return False, False, (captured + "\nFFmpeg timed out")[-16_000:]
             try:
                 stdout, stderr = process.communicate(timeout=min(0.2, remaining))
                 captured = (stdout or "") + "\n" + (stderr or "")
@@ -440,13 +537,16 @@ class JobWorker:
     def _finish(
         self, job: JobRecord, state: JobState, error: str | None = None, *, retry: bool = False
     ) -> JobRecord:
+        safe_error = self._safe_message(error) if error is not None else None
+        if safe_error is not None:
+            self._record_log("warning" if retry else "error", safe_error, job.id)
         if retry:
             return self.queue.update(
                 job.model_copy(
                     update={
                         "state": JobState.QUEUED,
                         "progress": JobProgress(stage=JobStage.QUEUED, percent=0),
-                        "error": error,
+                        "error": safe_error,
                         "started_at": None,
                     }
                 )
@@ -463,12 +563,27 @@ class JobWorker:
                     "progress": JobProgress(
                         stage=stage, percent=100 if state is JobState.SUCCEEDED else 0
                     ),
-                    "error": error,
+                    "error": safe_error,
                     "finished_at": _now(),
                     "cancel_requested": state is JobState.CANCELLED,
                 }
             )
         )
+
+    def _safe_message(self, value: object) -> str:
+        return sanitize_message(value, roots=self.resolver.roots.values(), limit=1000)
+
+    def _record_log(self, level: str, message: object, job_id: str | None = None) -> None:
+        safe = self._safe_message(message)
+        with self.db.transaction():
+            self.db.connection.execute(
+                "INSERT INTO worker_logs(timestamp,level,message,job_id) VALUES(?,?,?,?)",
+                (_now().isoformat(), level, safe, job_id),
+            )
+            self.db.connection.execute(
+                "DELETE FROM worker_logs WHERE id NOT IN "
+                "(SELECT id FROM worker_logs ORDER BY id DESC LIMIT 500)"
+            )
 
     def _run_scan_job(self, job: JobRecord) -> JobRunResult:
         """Run catalog discovery for a queued maintenance request."""
@@ -485,6 +600,21 @@ class JobWorker:
                         raise ValueError("scan request has invalid collection IDs")
                     collection_ids.add(value)
             summary = self.catalog.scan(collection_ids)
+            scan_status = {
+                "collection_ids": sorted(collection_ids) if collection_ids is not None else None,
+                "added": summary.added,
+                "modified": summary.modified,
+                "deleted": summary.deleted,
+                "invalid": summary.invalid,
+                "unchanged": summary.unchanged,
+                "completed_at": _now().isoformat(),
+            }
+            with self.db.transaction():
+                self.db.connection.execute(
+                    "INSERT INTO worker_status(key,value,updated_at) VALUES('last_scan',?,?) "
+                    "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+                    (json.dumps(scan_status, sort_keys=True), _now().isoformat()),
+                )
             completed = job.model_copy(
                 update={
                     "logs": (
@@ -497,12 +627,13 @@ class JobWorker:
                     )[-100:]
                 }
             )
+            self._record_log("info", completed.logs[-1], job.id)
             return JobRunResult(job=self._finish(completed, JobState.SUCCEEDED))
         except Exception as exc:
             return JobRunResult(job=self._finish(job, JobState.FAILED, str(exc)[:1000]))
 
     def _cleanup_worker_temporaries(self) -> int:
-        """Remove only direct UUID-named directories under the configured temp root."""
+        """Remove only direct temp directories tracked by inactive persisted jobs."""
 
         root = self.resolver.roots[RootKey.TEMP]
         removed = 0
@@ -512,6 +643,11 @@ class JobWorker:
             except ValueError:
                 continue
             if not candidate.is_dir():
+                continue
+            tracked = self.db.connection.execute(
+                "SELECT state FROM jobs WHERE id=?", (candidate.name,)
+            ).fetchone()
+            if tracked is None or tracked["state"] == "running":
                 continue
             self._cleanup(candidate)
             removed += 1
@@ -523,6 +659,7 @@ class JobWorker:
             completed = job.model_copy(
                 update={"logs": (job.logs + [f"temporary cleanup removed={removed}"])[-100:]}
             )
+            self._record_log("info", completed.logs[-1], job.id)
             return JobRunResult(job=self._finish(completed, JobState.SUCCEEDED))
         except Exception as exc:
             return JobRunResult(job=self._finish(job, JobState.FAILED, str(exc)[:1000]))
@@ -550,13 +687,56 @@ class JobWorker:
             cancelled = False
             output = ""
             if profile.loudness.mode == "two_pass":
+                measured_segments: dict[str, dict[str, float]] = {}
+                measured_by_path: dict[Path, dict[str, float]] = {}
+                segment_paths = {
+                    "clip": runtime_job.source_path,
+                    "intro": runtime_job.intro_path,
+                    "outro": runtime_job.outro_path,
+                }
+                segment_audio = {
+                    "clip": runtime_job.has_audio,
+                    "intro": runtime_job.intro_has_audio,
+                    "outro": runtime_job.outro_has_audio,
+                }
+                for name, path in segment_paths.items():
+                    if path is None or not segment_audio[name]:
+                        continue
+                    if path in measured_by_path:
+                        measured_segments[name] = measured_by_path[path]
+                        continue
+                    analysis_command = self.command_builder.build_named_segment_loudness_analysis(
+                        runtime_job, name
+                    )
+                    analysis_ok, analysis_cancelled, analysis_output = self._run_process(
+                        runtime_job, analysis_command, timeout
+                    )
+                    if analysis_cancelled:
+                        finished = self._finish(job, JobState.CANCELLED, "cancelled")
+                        return JobRunResult(job=finished)
+                    measured = self._parse_loudnorm(analysis_output)
+                    if not analysis_ok or measured is None:
+                        retry = job.attempt < job.max_attempts
+                        finished = self._finish(
+                            job,
+                            JobState.FAILED,
+                            f"{name} loudness analysis failed",
+                            retry=retry,
+                        )
+                        return JobRunResult(job=finished, retry_scheduled=retry)
+                    measured_by_path[path] = measured
+                    measured_segments[name] = measured
                 composed_mix = temp_dir / f"composed.{profile.output.extension}"
                 composed_job = runtime_job.model_copy(
                     update={"temporary_output_path": composed_mix}
                 )
                 composition_ok, composition_cancelled, composition_output = self._run_process(
                     composed_job,
-                    self.command_builder.build(composed_job, include_final_loudness=False),
+                    self.command_builder.build(
+                        composed_job,
+                        include_final_loudness=False,
+                        segment_loudness=measured_segments,
+                    ),
                     timeout,
                 )
                 if composition_cancelled:
@@ -622,7 +802,7 @@ class JobWorker:
             )
             self.queue.update(validating)
             probe = self.probe_client.probe(runtime_job.temporary_output_path)
-            if not probe.valid:
+            if not self._valid_output(probe, profile):
                 retry = job.attempt < job.max_attempts
                 finished = self._finish(
                     job, JobState.FAILED, "temporary output validation failed", retry=retry
@@ -635,12 +815,29 @@ class JobWorker:
                 )
             )
             self._publish(runtime_job.temporary_output_path, final)
-            with self.db.connection:
+            metadata_row = self.db.connection.execute(
+                "SELECT metadata FROM clips WHERE id=?", (job.clip_id,)
+            ).fetchone()
+            metadata: dict[str, Any] = (
+                json.loads(str(metadata_row["metadata"]))
+                if metadata_row and metadata_row["metadata"]
+                else {}
+            )
+            metadata.update(
+                {
+                    "source_fingerprint": job.source_fingerprint,
+                    "profile_fingerprint": job.profile_fingerprint,
+                    "output_fingerprint": self._file_fingerprint(final),
+                }
+            )
+            with self.db.transaction():
                 self.db.connection.execute(
-                    "UPDATE clips SET state='ready', output_available=1, updated_at=? WHERE id=?",
-                    (_now().isoformat(), job.clip_id),
+                    "UPDATE clips SET state='ready', output_available=1, metadata=?, updated_at=? "
+                    "WHERE id=?",
+                    (json.dumps(metadata, sort_keys=True), _now().isoformat(), job.clip_id),
                 )
             finished = self._finish(job, JobState.SUCCEEDED)
+            self._record_log("info", "compilation completed", job.id)
             return JobRunResult(job=finished)
         except Exception as exc:
             retry = job.attempt < job.max_attempts and not self._cancelled(job.id)
@@ -648,3 +845,23 @@ class JobWorker:
             return JobRunResult(job=finished, retry_scheduled=retry)
         finally:
             self._cleanup(temp_dir)
+
+    @staticmethod
+    def _file_fingerprint(path: Path) -> str:
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            for block in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(block)
+        return digest.hexdigest()
+
+    @staticmethod
+    def _valid_output(probe: MediaProbeResult, profile: ProcessingProfile) -> bool:
+        return bool(
+            probe.valid
+            and probe.duration_seconds > 0
+            and probe.width == profile.video.width
+            and probe.height == profile.video.height
+            and probe.frame_rate is not None
+            and abs(probe.frame_rate - profile.video.fps) < 0.05
+            and probe.has_audio
+        )

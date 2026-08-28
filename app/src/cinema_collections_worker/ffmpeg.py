@@ -65,16 +65,21 @@ class FfmpegCommandBuilder:
         return filter_text
 
     def build_segment_loudness_analysis(self, job: JobRecord) -> list[str]:
+        return self.build_named_segment_loudness_analysis(job, "clip")
+
+    def build_named_segment_loudness_analysis(self, job: JobRecord, segment: str) -> list[str]:
         profile = validate_profile(ProcessingProfile.model_validate(job.profile_settings))
         loudnorm = self._loudnorm(profile)
-        if loudnorm is None or job.source_path is None:
+        paths = {"clip": job.source_path, "intro": job.intro_path, "outro": job.outro_path}
+        path = paths.get(segment)
+        if loudnorm is None or path is None:
             return []
         return [
             self.executable,
             "-hide_banner",
             "-nostdin",
             "-i",
-            str(job.source_path),
+            str(path),
             "-af",
             loudnorm + ":print_format=json",
             "-f",
@@ -108,6 +113,7 @@ class FfmpegCommandBuilder:
         measured_loudness: Mapping[str, float] | None = None,
         *,
         include_final_loudness: bool = True,
+        segment_loudness: Mapping[str, Mapping[str, float]] | None = None,
     ) -> list[str]:
         profile = validate_profile(ProcessingProfile.model_validate(job.profile_settings))
         if job.source_path is None or job.temporary_output_path is None:
@@ -122,6 +128,8 @@ class FfmpegCommandBuilder:
             "-i",
             str(job.source_path),
         ]
+        if profile.decode_error_policy == "fail":
+            command.insert(4, "-xerror")
         inputs: list[tuple[str, Path]] = [("clip", job.source_path)]
         if job.intro_path is not None:
             command.extend(["-i", str(job.intro_path)])
@@ -132,8 +140,18 @@ class FfmpegCommandBuilder:
 
         graph: list[str] = []
         video_filter = self._video_filter(profile)
-        audio_filter = self._audio_filter(profile, job.duration_seconds)
+        durations = {
+            "clip": job.duration_seconds,
+            "intro": job.intro_duration_seconds,
+            "outro": job.outro_duration_seconds,
+        }
         for index, (name, _path) in enumerate(inputs):
+            audio_filter = self._audio_filter(profile, durations[name])
+            segment_normalization = self._loudnorm(
+                profile, segment_loudness.get(name) if segment_loudness else None
+            )
+            if segment_normalization is not None:
+                audio_filter += "," + segment_normalization
             graph.append(f"[{index}:v]{video_filter}[v_{name}]")
             if name == "clip" and not job.has_audio:
                 if profile.audio.missing_policy.mode != "silence":
@@ -163,7 +181,12 @@ class FfmpegCommandBuilder:
             )
             graph.append(f"[{audio_label}][a_outro]acrossfade=d={transition:g}[a_final_transition]")
             video_label, audio_label = "v_final_transition", "a_final_transition"
-        fade_out_start = max(0.0, job.duration_seconds - profile.fade_out_seconds)
+        total_duration = job.duration_seconds
+        if job.intro_path is not None:
+            total_duration += job.intro_duration_seconds - transition
+        if job.outro_path is not None:
+            total_duration += job.outro_duration_seconds - transition
+        fade_out_start = max(0.0, total_duration - profile.fade_out_seconds)
         graph.append(
             f"[{video_label}]fade=t=in:st=0:d={profile.fade_in_seconds:g},"
             f"fade=t=out:st={fade_out_start:g}:d={profile.fade_out_seconds:g}[v_final]"
@@ -188,6 +211,10 @@ class FfmpegCommandBuilder:
                 profile.video.codec,
                 "-preset",
                 profile.video.preset,
+                "-profile:v",
+                profile.video.h264_profile,
+                "-level:v",
+                profile.video.level,
             ]
         )
         if profile.video.quality.mode == "crf":

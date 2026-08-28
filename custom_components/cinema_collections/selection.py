@@ -135,3 +135,27 @@ class SelectionService:
 def _default_media_uri(relative_output_path: str) -> str:
     """Build the default Home Assistant media-source URI from a Worker-relative path."""
     return f"media-source://media_source/local/{quote(relative_output_path, safe='/')}"
+
+
+def normalize_media_uri_prefix(value: object) -> str:
+    """Validate the configured HA Media Source directory mapping."""
+
+    if not isinstance(value, str):
+        raise ValueError("media URI prefix must be a string")
+    prefix = value.strip().rstrip("/")
+    required = "media-source://media_source/local/"
+    if not prefix.startswith(required) or prefix == required.rstrip("/"):
+        raise ValueError("media URI prefix must map to a local Media Source directory")
+    if "?" in prefix or "#" in prefix or ".." in prefix.split("/"):
+        raise ValueError("media URI prefix contains an unsafe path")
+    return prefix
+
+
+def build_media_uri(prefix: str, relative_output_path: str) -> str:
+    """Map one Worker-relative compiled path below the configured media prefix."""
+
+    normalized = normalize_media_uri_prefix(prefix)
+    relative = relative_output_path.strip("/")
+    if not relative or ".." in relative.split("/"):
+        raise ValueError("Worker output path is not a safe relative path")
+    return f"{normalized}/{quote(relative, safe='/')}"

@@ -20,12 +20,15 @@ from .api_client import (
 from .const import (
     CLIENT_VERSION,
     CONF_ENDPOINT,
+    CONF_MEDIA_URI_PREFIX,
     CONF_TOKEN,
+    DEFAULT_MEDIA_URI_PREFIX,
     DOMAIN,
     EXPECTED_WORKER_COMPONENT,
 )
 from .models import WorkerHealth
 from .options_flow import CinemaCollectionsOptionsFlow
+from .selection import normalize_media_uri_prefix
 from .subentries import CollectionSubentryFlow, ProfileSubentryFlow
 
 
@@ -61,6 +64,9 @@ class CinemaCollectionsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 if not isinstance(raw_token, str) or not raw_token.strip():
                     raise ValueError("Worker credential cannot be empty")
                 token = raw_token.strip()
+                media_uri_prefix = normalize_media_uri_prefix(
+                    user_input.get(CONF_MEDIA_URI_PREFIX, DEFAULT_MEDIA_URI_PREFIX)
+                )
                 await self.async_set_unique_id(endpoint)
                 self._abort_if_unique_id_configured()
                 if any(
@@ -82,7 +88,11 @@ class CinemaCollectionsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             else:
                 return self.async_create_entry(
                     title="Cinema Collections Worker",
-                    data={CONF_ENDPOINT: endpoint, CONF_TOKEN: token},
+                    data={
+                        CONF_ENDPOINT: endpoint,
+                        CONF_TOKEN: token,
+                        CONF_MEDIA_URI_PREFIX: media_uri_prefix,
+                    },
                 )
 
         return self.async_show_form(
@@ -91,6 +101,7 @@ class CinemaCollectionsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 {
                     vol.Required(CONF_ENDPOINT): str,
                     vol.Required(CONF_TOKEN): str,
+                    vol.Optional(CONF_MEDIA_URI_PREFIX, default=DEFAULT_MEDIA_URI_PREFIX): str,
                 }
             ),
             errors=errors,

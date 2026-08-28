@@ -27,7 +27,8 @@ def test_app_dockerfile_is_multi_arch_pinned_and_runs_the_ingress_worker() -> No
     assert "BUILD_ARCH" in dockerfile
     assert "home-assistant" in dockerfile and ":3." in dockerfile
     assert "ffmpeg" in dockerfile and "python3" in dockerfile
-    assert "USER abc" in dockerfile
+    assert "USER abc" not in dockerfile
+    assert "/data/options.json" in dockerfile
     assert "cinema_collections_worker.main" in entrypoint
     assert (APP / "DOCS.md").exists()
     assert (APP / "src/cinema_collections_worker/templates/manager.html").exists()

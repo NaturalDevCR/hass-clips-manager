@@ -7,6 +7,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .paths import validate_collection_id, validate_relative_path
+from .profile_validation import ProcessingProfile
 
 
 class _Strict(BaseModel):
@@ -76,10 +77,22 @@ class ProfileCreate(_Strict):
     def valid_id(cls, value: str) -> str:
         return validate_collection_id(value)
 
+    @field_validator("settings", mode="before")
+    @classmethod
+    def valid_settings(cls, value: object) -> dict[str, Any]:
+        return ProcessingProfile.model_validate(value).model_dump(mode="json")
+
 
 class ProfilePatch(_Strict):
     name: str | None = Field(default=None, min_length=1)
     settings: dict[str, Any] | None = None
+
+    @field_validator("settings", mode="before")
+    @classmethod
+    def valid_settings(cls, value: object) -> dict[str, Any] | None:
+        if value is None:
+            return None
+        return ProcessingProfile.model_validate(value).model_dump(mode="json")
 
 
 class ProfileRecord(_Strict):

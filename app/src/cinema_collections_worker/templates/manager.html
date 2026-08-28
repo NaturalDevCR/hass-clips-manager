@@ -3,6 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="csrf-token" content="{{ csrf_token }}">
     <title>Cinema Collections Library Manager</title>
     <link rel="stylesheet" href="static/manager.css">
   </head>
@@ -10,10 +11,52 @@
     <main>
       <h1>Cinema Collections Library Manager</h1>
       <p>Files are managed through their catalog record. Source and compiled output are always selected separately.</p>
+      <section>
+        <h2>Import a source clip</h2>
+        <form id="upload-form">
+          <label>Collection <input name="collection" required></label>
+          <label>Video <input name="file" type="file" accept="video/*" required></label>
+          <button type="submit">Upload</button>
+        </form>
+        <p id="result" role="status"></p>
+      </section>
       <table>
-        <thead><tr><th>Collection</th><th>Source</th><th>State</th><th>Clip ID</th></tr></thead>
+        <thead><tr><th>Collection</th><th>Source</th><th>State</th><th>Clip ID</th><th>Actions</th></tr></thead>
         <tbody>{{ clip_rows }}</tbody>
       </table>
     </main>
+    <script>
+      window.managerCsrf = document.querySelector('meta[name="csrf-token"]').content;
+      const result = document.getElementById('result');
+      async function act(url, options = {}) {
+        options.headers = {...(options.headers || {}), 'X-CSRF-Token': window.managerCsrf};
+        const response = await fetch(url, options);
+        const body = await response.json();
+        if (!response.ok) throw new Error(body.message || 'Action failed');
+        return body;
+      }
+      document.getElementById('upload-form').addEventListener('submit', async event => {
+        event.preventDefault();
+        const data = new FormData(event.currentTarget);
+        const file = data.get('file');
+        try {
+          await act(`/manager/upload?collection_id=${encodeURIComponent(data.get('collection'))}`, {
+            method: 'POST', headers: {'X-Filename': file.name}, body: file
+          });
+          location.reload();
+        } catch (error) { result.textContent = error.message; }
+      });
+      document.querySelectorAll('[data-action]').forEach(button => button.addEventListener('click', async () => {
+        const id = button.closest('[data-clip-id]').dataset.clipId;
+        const action = button.dataset.action;
+        const options = {method: 'POST'};
+        if (action === 'trash') {
+          options.headers = {'Content-Type': 'application/json'};
+          options.body = JSON.stringify({target: 'source'});
+        }
+        try { await act(`/manager/clips/${id}/${action}`, options); location.reload(); }
+        catch (error) { result.textContent = error.message; }
+      }));
+    </script>
   </body>
 </html>

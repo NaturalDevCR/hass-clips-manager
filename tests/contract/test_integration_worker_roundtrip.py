@@ -99,7 +99,14 @@ class _ValidProbe:
     def probe(self, path: Path) -> Any:
         from cinema_collections_worker.probe import MediaProbeResult
 
-        return MediaProbeResult(valid=path.is_file(), duration_seconds=10)
+        return MediaProbeResult(
+            valid=path.is_file(),
+            duration_seconds=10,
+            width=3840,
+            height=2160,
+            frame_rate=24,
+            has_audio=True,
+        )
 
 
 class _MemoryHistory:
@@ -117,14 +124,18 @@ class _MemoryHistory:
         return HistorySelection(collection_id, selected, 1, False)
 
 
+_STRONG_TOKEN = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFG"
+
+
 def _settings(tmp_path: Path) -> WorkerSettings:
+    data_dir = tmp_path / "data"
     return WorkerSettings(
-        bearer_secret=SecretStr("roundtrip-token"),
-        data_dir=tmp_path / "data",
-        database_path=tmp_path / "data" / "worker.sqlite3",
-        log_dir=tmp_path / "logs",
-        temp_dir=tmp_path / "temp",
-        roots={key: tmp_path / "media" / key.value for key in RootKey},
+        bearer_secret=SecretStr(_STRONG_TOKEN),
+        data_dir=data_dir,
+        database_path=data_dir / "worker.sqlite3",
+        log_dir=data_dir / "logs",
+        temp_dir=data_dir / "media" / RootKey.TEMP.value,
+        roots={key: data_dir / "media" / key.value for key in RootKey},
         disk_reserve_bytes=0,
     )
 
@@ -156,7 +167,7 @@ async def test_integration_client_recovers_reads_worker_state_and_selects_ready_
     """A reconnect can observe one Worker job through its safe ready output."""
     app = create_app(_settings(tmp_path))
     session = _InProcessSession(app, fail_first_health=True)
-    client = WorkerApiClient("http://worker.test", "roundtrip-token", session)  # type: ignore[arg-type]
+    client = WorkerApiClient("http://worker.test", _STRONG_TOKEN, session)  # type: ignore[arg-type]
 
     async def no_wait(_: float) -> None:
         return None
@@ -191,6 +202,7 @@ async def test_integration_client_recovers_reads_worker_state_and_selects_ready_
             ),
         )
 
+    app.state.catalog.probe_client = _ValidProbe()
     accepted = await client.async_compile("films", idempotency_key="compile")
     queued_jobs = await client.async_list_jobs()
     assert accepted["id"] == queued_jobs[0].id
@@ -235,7 +247,9 @@ async def test_integration_client_recovers_reads_worker_state_and_selects_ready_
     )
     assert dry_run["clip_id"] == selected["clip_id"] == clip_id
     assert history.claimed == [clip_id]
-    assert selected["media_content_id"] == "media-source://media_source/local/films/fixture.mp4"
+    assert selected["media_content_id"] == (
+        "media-source://media_source/local/cinema-collections/compiled/films/fixture.mp4"
+    )
 
 
 @pytest.mark.asyncio
@@ -245,7 +259,7 @@ async def test_incompatible_worker_health_is_rejected_after_the_transport_recove
     """Compatibility checks reject a valid-but-unsupported Worker contract response."""
     client = WorkerApiClient(
         "http://worker.test",
-        "roundtrip-token",
+        _STRONG_TOKEN,
         _InProcessSession(create_app(_settings(tmp_path)), incompatible=True),  # type: ignore[arg-type]
     )
 
@@ -259,7 +273,7 @@ async def test_transport_disconnect_without_recovery_surfaces_no_device_action(
 ) -> None:
     """A Worker outage is observable as a connection error and cannot select media."""
     session = _InProcessSession(create_app(_settings(tmp_path)), fail_first_health=True)
-    client = WorkerApiClient("http://worker.test", "roundtrip-token", session)  # type: ignore[arg-type]
+    client = WorkerApiClient("http://worker.test", _STRONG_TOKEN, session)  # type: ignore[arg-type]
 
     def always_fail(url: str, **kwargs: Any) -> _Response:
         raise OSError("Worker remains disconnected")

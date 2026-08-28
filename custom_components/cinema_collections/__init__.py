@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, time
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -13,12 +13,30 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import async_track_time_change
 
 from .api_client import WorkerApiClient, WorkerApiError
-from .const import CONF_ENDPOINT, CONF_TOKEN, DOMAIN, PLATFORMS
+from .const import (
+    CONF_ENDPOINT,
+    CONF_HISTORY_RESET_TIME,
+    CONF_SYNC_ON_STARTUP,
+    CONF_TOKEN,
+    DEFAULT_HISTORY_RESET_TIME,
+    DEFAULT_SYNC_ON_STARTUP,
+    DOMAIN,
+    PLATFORMS,
+)
 from .coordinator import CinemaCollectionsCoordinator, override_for_entry, policies_for_entry
 from .history import PlaybackHistoryStore
 from .scheduler import CompilationScheduler, ConfigEntryRunTokenStore
 from .services import async_register_services
-from .subentries import collection_subentries
+from .subentries import (
+    SUBENTRY_COLLECTION,
+    SUBENTRY_PROFILE,
+    CollectionSubentryData,
+    ProfileSubentryData,
+    WorkerValidationError,
+    async_sync_collection,
+    async_sync_profile,
+    collection_subentries,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -69,9 +87,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # History owns its own local-midnight listener. Set it up here, rather than
     # waiting for a service call, so a restart reconciles a missed reset early.
     if getattr(hass, "config", None) is not None:
+        try:
+            reset_time = time.fromisoformat(
+                str(entry.options.get(CONF_HISTORY_RESET_TIME, DEFAULT_HISTORY_RESET_TIME))
+            )
+        except (AttributeError, TypeError, ValueError):
+            reset_time = time(0, 0)
         history = PlaybackHistoryStore(
             hass,
             storage_key=f"{DOMAIN}.{entry.entry_id}.playback_history",
+            reset_time=reset_time,
         )
         await history.async_setup()
     coordinator = CinemaCollectionsCoordinator(
@@ -80,6 +105,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         entry=entry if hasattr(entry, "async_on_unload") else None,
         collections=lambda: policies_for_entry(entry),
         override=lambda: override_for_entry(entry),
+        schedules=lambda: tuple(
+            schedule
+            for collection in collection_subentries(entry)
+            for schedule in collection.schedules()
+        ),
     )
     # Worker disconnects become a degraded snapshot, so setup remains available
     # for local policy/history and a later automatic refresh can reconnect.
@@ -87,6 +117,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await coordinator.async_config_entry_first_refresh()
     else:
         await coordinator.async_refresh()
+    if hasattr(entry, "async_on_unload") and bool(
+        entry.options.get(CONF_SYNC_ON_STARTUP, DEFAULT_SYNC_ON_STARTUP)
+    ):
+        await _async_sync_subentries_on_startup(hass, entry, client)
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = CinemaCollectionsRuntimeData(
         entry=entry,
         client=client,
@@ -116,3 +150,32 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if not runtime_data:
             hass.data.pop(DOMAIN)
     return unload_ok
+
+
+async def _async_sync_subentries_on_startup(
+    hass: HomeAssistant, entry: ConfigEntry, client: WorkerApiClient
+) -> None:
+    """Reconcile persisted subentries with Worker revisions using their stable keys."""
+    for subentry in tuple(entry.subentries.values()):
+        try:
+            if subentry.subentry_type == SUBENTRY_COLLECTION:
+                collection = CollectionSubentryData.from_dict(subentry.data)
+                synchronized = await async_sync_collection(client, collection)
+                if synchronized.worker_revision != collection.worker_revision:
+                    hass.config_entries.async_update_subentry(
+                        entry, subentry, data=synchronized.as_dict(), title=synchronized.name
+                    )
+            elif subentry.subentry_type == SUBENTRY_PROFILE:
+                profile = ProfileSubentryData.from_dict(subentry.data)
+                synchronized = await async_sync_profile(client, profile)
+                if synchronized.worker_revision != profile.worker_revision:
+                    hass.config_entries.async_update_subentry(
+                        entry, subentry, data=synchronized.as_dict(), title=synchronized.name
+                    )
+        except (WorkerApiError, WorkerValidationError, KeyError, TypeError, ValueError) as error:
+            _LOGGER.warning(
+                "Cinema Collections could not synchronize %s %s on startup: %s",
+                subentry.subentry_type,
+                subentry.unique_id,
+                error,
+            )

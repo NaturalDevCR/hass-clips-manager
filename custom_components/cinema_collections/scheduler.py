@@ -12,7 +12,18 @@ from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
 from .api_client import WorkerApiClient
-from .const import CONF_SCHEDULE_RUN_TOKENS
+from .const import CONF_SCHEDULE_RUN_TOKENS, MAX_SCHEDULE_RUN_TOKENS
+
+
+def _prune_token_states(
+    states: Mapping[str, str], *, limit: int = MAX_SCHEDULE_RUN_TOKENS
+) -> dict[str, str]:
+    """Bound durable occurrence history while retaining the newest stable tokens."""
+
+    if limit < 1:
+        raise ValueError("schedule token limit must be positive")
+    ordered = sorted(states.items())
+    return dict(ordered[-limit:])
 
 
 class RunTokenStore(Protocol):
@@ -79,7 +90,10 @@ class ConfigEntryRunTokenStore:
     def _persist(self, states: Mapping[str, str]) -> None:
         self._hass.config_entries.async_update_entry(
             self._entry,
-            options={**self._entry.options, CONF_SCHEDULE_RUN_TOKENS: dict(sorted(states.items()))},
+            options={
+                **self._entry.options,
+                CONF_SCHEDULE_RUN_TOKENS: _prune_token_states(states),
+            },
         )
 
     async def async_begin(self, token: str) -> bool:

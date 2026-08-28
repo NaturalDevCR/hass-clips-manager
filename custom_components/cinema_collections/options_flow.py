@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import time
 from typing import Any
 
 import voluptuous as vol
@@ -9,7 +10,14 @@ from homeassistant import config_entries
 from homeassistant.config_entries import ConfigFlowResult
 from homeassistant.helpers import selector
 
-from .const import CONF_OVERRIDE_COLLECTION_ID, CONF_OVERRIDE_MODE
+from .const import (
+    CONF_HISTORY_RESET_TIME,
+    CONF_OVERRIDE_COLLECTION_ID,
+    CONF_OVERRIDE_MODE,
+    CONF_SYNC_ON_STARTUP,
+    DEFAULT_HISTORY_RESET_TIME,
+    DEFAULT_SYNC_ON_STARTUP,
+)
 from .resolver import OverrideKind, OverrideMode
 
 OVERRIDE_MODE_SELECTOR: Any = selector.SelectSelector(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
@@ -35,6 +43,9 @@ class CinemaCollectionsOptionsFlow(config_entries.OptionsFlow):
                     OverrideMode.explicit(str(selected))
                 elif selected is not None:
                     raise ValueError("only explicit mode may include a collection ID")
+                reset_time = time.fromisoformat(str(user_input[CONF_HISTORY_RESET_TIME]))
+                if reset_time.second or reset_time.microsecond:
+                    raise ValueError("history reset time must use minute precision")
             except (KeyError, TypeError, ValueError):
                 errors["base"] = "invalid_override"
             else:
@@ -44,6 +55,8 @@ class CinemaCollectionsOptionsFlow(config_entries.OptionsFlow):
                     CONF_OVERRIDE_COLLECTION_ID: selected
                     if mode is OverrideKind.EXPLICIT
                     else None,
+                    CONF_HISTORY_RESET_TIME: reset_time.strftime("%H:%M"),
+                    CONF_SYNC_ON_STARTUP: bool(user_input[CONF_SYNC_ON_STARTUP]),
                 }
                 return self.async_create_entry(title="", data=result)
 
@@ -59,6 +72,14 @@ class CinemaCollectionsOptionsFlow(config_entries.OptionsFlow):
                         CONF_OVERRIDE_COLLECTION_ID,
                         default=defaults.get(CONF_OVERRIDE_COLLECTION_ID, ""),
                     ): str,
+                    vol.Required(
+                        CONF_HISTORY_RESET_TIME,
+                        default=defaults.get(CONF_HISTORY_RESET_TIME, DEFAULT_HISTORY_RESET_TIME),
+                    ): str,
+                    vol.Required(
+                        CONF_SYNC_ON_STARTUP,
+                        default=defaults.get(CONF_SYNC_ON_STARTUP, DEFAULT_SYNC_ON_STARTUP),
+                    ): bool,
                 }
             ),
             errors=errors,

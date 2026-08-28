@@ -1,9 +1,12 @@
+import json
+
 from cinema_collections_worker.catalog import CatalogService
 from cinema_collections_worker.database import Database
 from cinema_collections_worker.domain import CollectionCreate, ProfileCreate
 from cinema_collections_worker.models import ClipState
 from cinema_collections_worker.paths import RootKey, SafePathResolver
 from cinema_collections_worker.probe import MediaProbeResult
+from cinema_collections_worker.profile_validation import ProcessingProfile
 from cinema_collections_worker.repositories import CollectionRepository
 
 
@@ -27,7 +30,11 @@ def setup(tmp_path):
     from cinema_collections_worker.repositories import ProfileRepository
 
     ProfileRepository(db).create(
-        ProfileCreate(id="default", name="Default", settings={"quality": "source"}),
+        ProfileCreate(
+            id="default",
+            name="Default",
+            settings=ProcessingProfile().model_dump(mode="json"),
+        ),
         actor="t",
         request_id="profile-1",
     )
@@ -62,6 +69,16 @@ def test_scan_adds_invalid_no_audio_and_duplicate_name(tmp_path):
     ).fetchall()
     assert any(r[0] == ClipState.INVALID for r in rows)
     assert any("has_audio" in r[1] for r in rows)
+
+
+def test_scan_output_extension_comes_from_validated_profile_not_source(tmp_path):
+    db, source, service = setup(tmp_path)
+    (source / "cinematic.mkv").write_bytes(b"fixture")
+
+    service.scan()
+
+    output = db.connection.execute("SELECT relative_output_path FROM clips").fetchone()[0]
+    assert output.endswith(".mp4")
 
 
 def test_scan_change_stales_and_missing_preserves_output(tmp_path):
@@ -107,8 +124,9 @@ def test_profile_change_marks_ready_output_stale(tmp_path):
     source_file.write_bytes(b"same")
     service.scan()
     db.connection.execute("UPDATE clips SET state='ready', output_available=1")
+    changed = ProcessingProfile(video={"width": 1920, "height": 1080}).model_dump(mode="json")
     db.connection.execute(
-        "UPDATE profiles SET settings=? WHERE id='default'", ('{"quality": "high"}',)
+        "UPDATE profiles SET settings=? WHERE id='default'", (json.dumps(changed),)
     )
     db.connection.commit()
     summary = service.scan()

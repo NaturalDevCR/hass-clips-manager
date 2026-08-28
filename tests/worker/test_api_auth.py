@@ -6,10 +6,12 @@ from cinema_collections_worker.settings import WorkerSettings
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
+_TOKEN = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFG"
+
 
 def _client(tmp_path: Path) -> TestClient:
     settings = WorkerSettings(
-        bearer_secret=SecretStr("test-token"),
+        bearer_secret=SecretStr(_TOKEN),
         data_dir=tmp_path,
         database_path=tmp_path / "worker.sqlite3",
         log_dir=tmp_path / "logs",
@@ -40,7 +42,7 @@ def test_api_rejects_missing_or_wrong_bearer_token(tmp_path: Path) -> None:
 
 def test_health_reports_compatible_worker_versions_and_request_id(tmp_path: Path) -> None:
     response = _client(tmp_path).get(
-        "/api/v1/health", headers={"Authorization": "Bearer test-token"}
+        "/api/v1/health", headers={"Authorization": f"Bearer {_TOKEN}"}
     )
 
     assert response.status_code == 200
@@ -57,7 +59,7 @@ def test_health_reports_compatible_worker_versions_and_request_id(tmp_path: Path
 
 def test_mutation_requires_nonempty_idempotency_key_and_supported_client(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    headers = {"Authorization": "Bearer test-token"}
+    headers = {"Authorization": f"Bearer {_TOKEN}"}
     body = {
         "id": "films",
         "name": "Films",

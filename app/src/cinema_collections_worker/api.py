@@ -4,13 +4,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
-import html
 import json
 import shutil
 import uuid
 from collections.abc import Callable
-from contextlib import suppress
+from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any, Literal, cast
@@ -18,13 +18,14 @@ from uuid import UUID
 
 from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query, Request, Response, status
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 
 from .auth import require_bearer_token, require_idempotency_key
 from .catalog import CatalogService
 from .database import Database
+from .default_profiles import seed_builtin_profiles
 from .domain import (
     CollectionCreate,
     CollectionPatch,
@@ -34,8 +35,9 @@ from .domain import (
     ProfileRecord,
 )
 from .jobs import CompileRequest as InternalCompileRequest
-from .jobs import JobProgress, JobRecord, JobService, JobStage
+from .jobs import JobProgress, JobRecord, JobService, JobStage, JobWorker
 from .library_manager import LibraryManager
+from .manager_web import install_manager_routes
 from .models import ClipRecord
 from .paths import SafePathResolver
 from .queue import PersistentJobQueue
@@ -315,23 +317,24 @@ def _replay_or_remember_job(
     create: Callable[[], JobRecord],
 ) -> JobRecord:
     fingerprint = _idempotency_fingerprint(operation, payload)
-    row = database.connection.execute(
-        "SELECT actor, operation, fingerprint, response FROM idempotency_records WHERE request_id=?",
-        (key,),
-    ).fetchone()
-    if row is not None:
-        if (
-            row["actor"] != _ACTOR
-            or row["operation"] != operation
-            or row["fingerprint"] != fingerprint
-        ):
-            raise IdempotencyConflict("idempotency key was already used for another request")
-        try:
-            return queue.get(str(json.loads(row["response"])["id"]))
-        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
-            raise ValueError("idempotent job response is unavailable") from exc
-    job = create()
-    with database.connection:
+    with database.transaction():
+        row = database.connection.execute(
+            "SELECT actor, operation, fingerprint, response FROM idempotency_records "
+            "WHERE request_id=?",
+            (key,),
+        ).fetchone()
+        if row is not None:
+            if (
+                row["actor"] != _ACTOR
+                or row["operation"] != operation
+                or row["fingerprint"] != fingerprint
+            ):
+                raise IdempotencyConflict("idempotency key was already used for another request")
+            try:
+                return queue.get(str(json.loads(row["response"])["id"]))
+            except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+                raise ValueError("idempotent job response is unavailable") from exc
+        job = create()
         database.connection.execute(
             "INSERT INTO idempotency_records(request_id,actor,operation,response,created_at,fingerprint) VALUES(?,?,?,?,?,?)",
             (
@@ -373,12 +376,59 @@ def create_app(settings: WorkerSettings) -> FastAPI:
     for path in {settings.data_dir, settings.log_dir, settings.temp_dir, *settings.roots.values()}:
         Path(path).mkdir(parents=True, exist_ok=True)
     database = Database.create(str(settings.database_path))
+    seed_builtin_profiles(database)
     resolver = SafePathResolver({key.value: root for key, root in settings.roots.items()})
     collections = CollectionRepository(database)
     profiles = ProfileRepository(database)
     queue = PersistentJobQueue(database)
+
+    @asynccontextmanager
+    async def lifespan(running_app: FastAPI):
+        worker: JobWorker = running_app.state.job_worker
+        database.connection.execute(
+            "UPDATE jobs SET state='queued', started_at=NULL, error='interrupted by Worker restart', "
+            "progress=? WHERE state='running' AND attempt < max_attempts",
+            (json.dumps({"stage": "queued", "percent": 0, "eta_seconds": None}),),
+        )
+        database.connection.execute(
+            "UPDATE jobs SET state='failed', finished_at=?, error='interrupted after retry cap', "
+            "progress=? WHERE state='running' AND attempt >= max_attempts",
+            (
+                datetime.now(UTC).isoformat(),
+                json.dumps({"stage": "failed", "percent": 0, "eta_seconds": None}),
+            ),
+        )
+        database.connection.commit()
+        stopping = asyncio.Event()
+
+        async def consume() -> None:
+            while not stopping.is_set():
+                result = await asyncio.to_thread(worker.run_once)
+                if result is not None:
+                    continue
+                with suppress(TimeoutError):
+                    await asyncio.wait_for(stopping.wait(), timeout=0.05)
+
+        task = asyncio.create_task(consume(), name="cinema-collections-job-consumer")
+        running_app.state.consumer_task = task
+        try:
+            yield
+        finally:
+            stopping.set()
+            running = database.connection.execute(
+                "SELECT id FROM jobs WHERE state='running' LIMIT 1"
+            ).fetchone()
+            if running is not None:
+                queue.request_cancel(str(running["id"]))
+            await task
+            database.close()
+
     app = FastAPI(
-        title="Cinema Collections Worker API", version=API_VERSION, docs_url=None, redoc_url=None
+        title="Cinema Collections Worker API",
+        version=API_VERSION,
+        docs_url=None,
+        redoc_url=None,
+        lifespan=lifespan,
     )
     app.state.settings = settings
     app.state.database = database
@@ -388,7 +438,11 @@ def create_app(settings: WorkerSettings) -> FastAPI:
     app.state.queue = queue
     app.state.catalog = CatalogService(database, resolver)
     app.state.jobs = JobService(
-        database, resolver, disk_reserve_bytes=settings.disk_reserve_bytes, queue=queue
+        database,
+        resolver,
+        disk_reserve_bytes=settings.disk_reserve_bytes,
+        queue=queue,
+        catalog=app.state.catalog,
     )
     app.state.library_manager = LibraryManager(
         database,
@@ -397,11 +451,13 @@ def create_app(settings: WorkerSettings) -> FastAPI:
         queue=queue,
         jobs=app.state.jobs,
     )
+    app.state.job_worker = JobWorker(database, resolver, queue=queue, catalog=app.state.catalog)
     app.mount(
         "/static",
         StaticFiles(directory=Path(__file__).with_name("static")),
         name="library-manager-static",
     )
+    install_manager_routes(app, settings)
 
     @app.middleware("http")
     async def assign_request_id(request: Request, call_next: Callable[[Request], Any]) -> Response:
@@ -461,33 +517,6 @@ def create_app(settings: WorkerSettings) -> FastAPI:
     def get_health() -> Health:
         return Health()
 
-    @app.get("/", include_in_schema=False, response_class=HTMLResponse)
-    def library_manager_page() -> HTMLResponse:
-        """Small Ingress-only overview; mutations remain manager-mediated."""
-
-        rows = database.connection.execute(
-            "SELECT id, collection_id, relative_source_path, state FROM clips ORDER BY updated_at DESC, id DESC"
-        ).fetchall()
-        clip_rows = (
-            "".join(
-                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>".format(
-                    html.escape(str(row["collection_id"])),
-                    html.escape(str(row["relative_source_path"])),
-                    html.escape(str(row["state"])),
-                    html.escape(str(row["id"])),
-                )
-                for row in rows
-            )
-            or '<tr><td colspan="4">No catalogued clips yet.</td></tr>'
-        )
-        template = (
-            Path(__file__)
-            .with_name("templates")
-            .joinpath("manager.html")
-            .read_text(encoding="utf-8")
-        )
-        return HTMLResponse(template.replace("{{ clip_rows }}", clip_rows))
-
     @app.get(
         "/api/v1/status",
         response_model=Status,
@@ -506,9 +535,30 @@ def create_app(settings: WorkerSettings) -> FastAPI:
         storage: dict[str, Any] = {}
         for key, root in resolver.roots.items():
             with suppress(OSError):
-                storage[key.value] = {"path": str(root), "free_bytes": shutil.disk_usage(root).free}
+                storage[key.value] = {"free_bytes": shutil.disk_usage(root).free}
+        scans = {
+            str(row["key"]): json.loads(row["value"])
+            for row in database.connection.execute(
+                "SELECT key,value FROM worker_status ORDER BY key"
+            ).fetchall()
+        }
+        latest_errors = [
+            Error(
+                code="worker_error",
+                message=str(row["message"]),
+                retryable=False,
+                request_id=_request_id(request),
+            )
+            for row in database.connection.execute(
+                "SELECT message FROM worker_logs WHERE level='error' ORDER BY id DESC LIMIT 10"
+            ).fetchall()
+        ]
         return Status(
-            queue_depth=queued, current_job=current, storage=storage, scans={}, latest_errors=[]
+            queue_depth=queued,
+            current_job=current,
+            storage=storage,
+            scans=scans,
+            latest_errors=latest_errors,
         )
 
     @app.get(
@@ -612,7 +662,9 @@ def create_app(settings: WorkerSettings) -> FastAPI:
         ).fetchall()
         return ClipsPage.model_validate(
             _page(
-                [_clip_from_row(row).model_dump(mode="json") for row in rows], page, page_size
+                [_live_clip(database, resolver, row).model_dump(mode="json") for row in rows],
+                page,
+                page_size,
             ).model_dump()
         )
 
@@ -629,7 +681,7 @@ def create_app(settings: WorkerSettings) -> FastAPI:
         ).fetchone()
         if row is None:
             raise KeyError(clip_id)
-        return _clip_from_row(row)
+        return _live_clip(database, resolver, row)
 
     @app.post(
         "/api/v1/scan",
@@ -736,7 +788,19 @@ def create_app(settings: WorkerSettings) -> FastAPI:
         operation_id="listLogs",
     )
     def list_logs(page: PageNumber = 1, page_size: PageSize = 25) -> LogsPage:
-        return LogsPage.model_validate(_page([], page, page_size).model_dump())
+        rows = database.connection.execute(
+            "SELECT timestamp,level,message,job_id FROM worker_logs ORDER BY id DESC"
+        ).fetchall()
+        entries = [
+            LogEntry(
+                timestamp=row["timestamp"],
+                level=str(row["level"]),
+                message=str(row["message"]),
+                job_id=row["job_id"],
+            ).model_dump(mode="json")
+            for row in rows
+        ]
+        return LogsPage.model_validate(_page(entries, page, page_size).model_dump())
 
     @app.post(
         "/api/v1/cleanup-temporaries",
@@ -774,3 +838,20 @@ def _clip_from_row(row: Any) -> ClipRecord:
             "updated_at": row["updated_at"],
         }
     )
+
+
+def _live_clip(database: Database, resolver: SafePathResolver, row: Any) -> ClipRecord:
+    """Reconcile the persisted availability bit with one exact compiled path."""
+
+    if bool(row["output_available"]) and row["relative_output_path"]:
+        output = resolver.resolve("compiled", str(row["relative_output_path"]))
+        if output.is_symlink() or not output.is_file():
+            with database.transaction():
+                database.connection.execute(
+                    "UPDATE clips SET state='stale', output_available=0, updated_at=? WHERE id=?",
+                    (datetime.now(UTC).isoformat(), row["id"]),
+                )
+            row = database.connection.execute(
+                "SELECT * FROM clips WHERE id=?", (row["id"],)
+            ).fetchone()
+    return _clip_from_row(row)

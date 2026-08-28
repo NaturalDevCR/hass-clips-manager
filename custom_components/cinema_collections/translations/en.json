@@ -6,7 +6,8 @@
         "description": "Enter the private Worker endpoint and bearer token.",
         "data": {
           "endpoint": "Worker endpoint",
-          "token": "Bearer token"
+          "token": "Bearer token",
+          "media_uri_prefix": "Compiled media source directory URI"
         }
       }
     },
@@ -27,7 +28,9 @@
         "description": "Choose whether selection follows policy, uses the default collection, or uses one permitted collection.",
         "data": {
           "override_mode": "Selection mode",
-          "override_collection_id": "Collection for explicit mode"
+          "override_collection_id": "Collection for explicit mode",
+          "history_reset_time": "Daily history reset time",
+          "sync_on_startup": "Synchronize configuration on startup"
         }
       }
     },
@@ -118,7 +121,11 @@
       "queue_depth": {"name": "Queue depth"},
       "latest_error": {"name": "Latest Worker error"},
       "current_job_progress": {"name": "Current job progress"},
-      "worker_version": {"name": "Worker version"}
+      "worker_version": {"name": "Worker version"},
+      "next_schedule": {"name": "Next compilation schedule"},
+      "collection_priorities": {"name": "Collection priorities"},
+      "compilation_summary": {"name": "Compilation summary"},
+      "clip_states": {"name": "Clip states"}
     },
     "button": {
       "scan_library": {"name": "Scan library"},

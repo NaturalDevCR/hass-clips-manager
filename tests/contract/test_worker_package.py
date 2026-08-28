@@ -46,8 +46,9 @@ from cinema_collections_worker.settings import WorkerSettings
 
 root = Path.cwd() / 'runtime'
 settings = WorkerSettings(
-    bearer_secret=SecretStr('token'), data_dir=root, database_path=root / 'worker.sqlite3',
-    log_dir=root / 'logs', temp_dir=root / 'tmp',
+    bearer_secret=SecretStr('0123456789abcdefghijklmnopqrstuvwxyzABCDEFG'),
+    data_dir=root, database_path=root / 'worker.sqlite3',
+    log_dir=root / 'logs', temp_dir=root / 'temp',
     roots={key: root / key.value for key in RootKey},
 )
 app = create_app(settings)
