@@ -130,6 +130,28 @@ def test_manager_scan_route_queues_a_library_wide_or_scoped_scan_job(tmp_path: P
     assert scoped.json()["details"]["collection_id"] == "films"
 
 
+def test_manager_job_status_route_backs_row_progress_polling(tmp_path: Path) -> None:
+    client = TestClient(_app(tmp_path))
+    _seed_collection(client)
+    csrf = _manager_session(client)
+    headers = {"X-CSRF-Token": csrf}
+    job_id = client.post("/manager/scan?collection_id=films", headers=headers).json()["details"][
+        "job_id"
+    ]
+
+    status = client.get(f"/manager/jobs/{job_id}")
+
+    assert status.status_code == 200
+    body = status.json()
+    assert body["id"] == job_id
+    assert body["state"] in {"queued", "running", "succeeded", "failed"}
+    assert body["progress"]["stage"]
+    assert 0 <= body["progress"]["percent"] <= 100
+
+    assert TestClient(_app(tmp_path)).get(f"/manager/jobs/{job_id}").status_code == 401
+    assert client.get("/manager/jobs/not-a-real-job").status_code == 404
+
+
 def test_external_manager_requires_bearer_before_issuing_session(tmp_path: Path) -> None:
     client = TestClient(_app(tmp_path, mode=WorkerMode.EXTERNAL))
 

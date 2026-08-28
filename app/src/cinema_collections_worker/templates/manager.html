@@ -129,6 +129,33 @@
           : `Upload failed: ${failures.join('; ')}`;
       });
 
+      // Polls a queued job's real progress until it reaches a terminal state.
+      // onUpdate is called with the job payload ({state, progress: {stage,
+      // percent, eta_seconds}, error}) on every poll, including the last one.
+      async function pollJob(jobId, onUpdate) {
+        const terminal = new Set(['succeeded', 'failed', 'cancelled']);
+        for (;;) {
+          let job;
+          try {
+            job = await act(`manager/jobs/${jobId}`);
+          } catch {
+            return null; // job status unavailable; caller falls back to a reload
+          }
+          onUpdate(job);
+          if (terminal.has(job.state)) return job;
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+      }
+
+      function jobIdFromDetails(details) {
+        if (!details) return null;
+        if (typeof details.job_id === 'string') return details.job_id;
+        if (Array.isArray(details.job_ids) && typeof details.job_ids[0] === 'string') {
+          return details.job_ids[0];
+        }
+        return null;
+      }
+
       document.getElementById('scan-form').addEventListener('submit', async event => {
         event.preventDefault();
         const scanResult = document.getElementById('scan-result');
@@ -147,9 +174,22 @@
           const url = collection
             ? `manager/scan?collection_id=${encodeURIComponent(collection)}`
             : 'manager/scan';
-          await act(url, {method: 'POST'});
-          scanResult.textContent = 'Scan queued. Reloading shortly…';
-          setTimeout(() => location.reload(), 1500);
+          const response = await act(url, {method: 'POST'});
+          const jobId = jobIdFromDetails(response && response.details);
+          if (jobId) {
+            const job = await pollJob(jobId, job => {
+              const pct = Math.round((job.progress && job.progress.percent) || 0);
+              scanResult.textContent = `Scanning… ${job.progress.stage} ${pct}%`;
+            });
+            if (job && job.state === 'failed') {
+              scanResult.classList.add('is-error');
+              scanResult.textContent = job.error || 'Scan failed.';
+              button.disabled = false;
+              return;
+            }
+          }
+          scanResult.textContent = 'Scan complete. Reloading…';
+          location.reload();
         } catch (error) {
           scanResult.classList.add('is-error');
           scanResult.textContent = error.message;
@@ -158,15 +198,30 @@
       });
 
       document.querySelectorAll('[data-action]').forEach(button => button.addEventListener('click', async () => {
-        const id = button.closest('[data-clip-id]').dataset.clipId;
+        const row = button.closest('[data-clip-id]');
+        const id = row.dataset.clipId;
         const action = button.dataset.action;
         const options = {method: 'POST'};
         if (action === 'trash') {
           options.headers = {'Content-Type': 'application/json'};
           options.body = JSON.stringify({target: 'source'});
         }
-        try { await act(`manager/clips/${id}/${action}`, options); location.reload(); }
-        catch (error) { result.textContent = error.message; }
+        const actionsCell = button.closest('td');
+        try {
+          const response = await act(`manager/clips/${id}/${action}`, options);
+          const jobId = (action === 'scan' || action === 'recompile')
+            ? jobIdFromDetails(response && response.details)
+            : null;
+          if (jobId) {
+            actionsCell.innerHTML = '<span class="row-progress">Queued…</span>';
+            const label = actionsCell.querySelector('.row-progress');
+            await pollJob(jobId, job => {
+              const pct = Math.round((job.progress && job.progress.percent) || 0);
+              label.textContent = `${job.progress.stage} ${pct}%`;
+            });
+          }
+          location.reload();
+        } catch (error) { result.textContent = error.message; }
       }));
     </script>
   </body>

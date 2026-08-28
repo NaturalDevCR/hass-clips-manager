@@ -168,6 +168,19 @@ def install_manager_routes(app: FastAPI, settings: WorkerSettings) -> None:
         page.headers["Cache-Control"] = "no-store"
         return page
 
+    @app.get("/manager/jobs/{job_id}", include_in_schema=False)
+    def job_status(request: Request, job_id: str) -> Any:
+        """Bounded polling target for scan/recompile progress in the manager UI."""
+        if _valid_session(request) is None:
+            raise HTTPException(status_code=401, detail="Library Manager authentication required")
+        job = request.app.state.queue.get(job_id)
+        return {
+            "id": job.id,
+            "state": job.state.value,
+            "progress": job.progress.model_dump(mode="json"),
+            "error": job.error,
+        }
+
     @app.post("/manager/scan", status_code=202, include_in_schema=False)
     def scan_library(
         request: Request,
