@@ -10,7 +10,7 @@ COMPATIBILITY_PROFILE_ID = "compatibility-4k-loudness"
 
 
 def compatibility_4k_loudness_profile() -> ProcessingProfile:
-    """Return the editable Compatibility 4K Loudness baseline."""
+    """Return the editable Compatibility 4K Loudness Profile baseline."""
     return ProcessingProfile()
 
 
@@ -29,7 +29,7 @@ def seed_builtin_profiles(database: Database) -> None:
             "VALUES(?,?,?,?,?)",
             (
                 COMPATIBILITY_PROFILE_ID,
-                "Compatibility 4K Loudness",
+                "Compatibility 4K Loudness Profile",
                 settings,
                 now,
                 now,

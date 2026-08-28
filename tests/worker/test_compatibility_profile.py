@@ -1,4 +1,9 @@
-from cinema_collections_worker.default_profiles import compatibility_4k_loudness_profile
+from cinema_collections_worker.database import Database
+from cinema_collections_worker.default_profiles import (
+    COMPATIBILITY_PROFILE_ID,
+    compatibility_4k_loudness_profile,
+    seed_builtin_profiles,
+)
 from cinema_collections_worker.profile_validation import AssetFingerprints, profile_fingerprint
 
 
@@ -22,6 +27,17 @@ def test_profile_fingerprint_is_stable_and_asset_sensitive():
     assert profile_fingerprint(profile, assets) != profile_fingerprint(
         profile, AssetFingerprints(intro="x", outro="b")
     )
+
+
+def test_seeded_builtin_profile_uses_exact_required_display_name(tmp_path):
+    db = Database.create(str(tmp_path / "worker.sqlite3"))
+    seed_builtin_profiles(db)
+    with db.transaction() as connection:
+        row = connection.execute(
+            "SELECT name FROM profiles WHERE id = ?", (COMPATIBILITY_PROFILE_ID,)
+        ).fetchone()
+    assert row is not None
+    assert row["name"] == "Compatibility 4K Loudness Profile"
 
 
 def test_profile_fingerprint_accepts_asset_mapping():

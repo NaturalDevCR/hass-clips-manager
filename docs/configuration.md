@@ -6,7 +6,7 @@ Set a unique random `bearer_secret` before first use and rotate it by updating b
 
 `source_root` and `compiled_root` must both be distinct descendants of the trusted media root. The Worker rejects absolute user-supplied clip paths, traversal paths, and paths outside those roots. Its data directory holds the database, bounded logs, temporary processing files, and recoverable Library Manager trash; back it up with the database.
 
-Set `disk_reserve_bytes` to retain free space for Home Assistant and the host. Hardware acceleration is disabled by default. Processing profiles are typed settings, not shell commands or raw FFmpeg filters. Start with the Compatibility 4K Loudness profile, then create a named profile for intentional changes.
+Set `disk_reserve_bytes` to retain free space for Home Assistant and the host. Hardware acceleration is disabled by default. Processing profiles are typed settings, not shell commands or raw FFmpeg filters. Start with the Compatibility 4K Loudness Profile, then create a named profile for intentional changes.
 
 ## Collections and policy
 
