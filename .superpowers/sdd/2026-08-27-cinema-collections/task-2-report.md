@@ -41,7 +41,7 @@ exit 0
 
 ## Commit
 
-`feat: define worker API v1 contract` (`COMMIT_HASH_FILLED_AFTER_COMMIT`)
+`feat: define worker API v1 contract` (`65f5acbf05b902babb0db2b9dba44c21fdd786dd`)
 
 ## Self-review
 
