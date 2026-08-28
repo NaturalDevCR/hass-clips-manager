@@ -7,6 +7,7 @@ import json
 import os
 import shutil
 import uuid
+from contextlib import suppress
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
@@ -159,16 +160,23 @@ class LibraryManager:
         )
 
     def _audit(self, action_type: str, target_id: str, details: dict[str, Any]) -> AuditEvent:
+        with self.db.connection:
+            return self._insert_audit(action_type, target_id, details)
+
+    def _insert_audit(
+        self, action_type: str, target_id: str, details: dict[str, Any]
+    ) -> AuditEvent:
+        """Insert an audit row in the caller's transaction when one is open."""
+
         request_id = str(uuid.uuid4())
         occurred_at = self._now()
         summary = json.dumps(details, sort_keys=True, separators=(",", ":"))
-        with self.db.connection:
-            cursor = self.db.connection.execute(
-                "INSERT INTO audit_events("
-                "action_type,target_id,actor,request_id,summary,occurred_at"
-                ") VALUES(?,?,?,?,?,?)",
-                (action_type, target_id, self.actor, request_id, summary, occurred_at),
-            )
+        cursor = self.db.connection.execute(
+            "INSERT INTO audit_events("
+            "action_type,target_id,actor,request_id,summary,occurred_at"
+            ") VALUES(?,?,?,?,?,?)",
+            (action_type, target_id, self.actor, request_id, summary, occurred_at),
+        )
         return AuditEvent(
             id=int(cursor.lastrowid),
             action_type=action_type,
@@ -179,6 +187,47 @@ class LibraryManager:
             occurred_at=occurred_at,
             details=details,
         )
+
+    def _mark_trash_failure(self, trash_id: str, failure: Exception) -> None:
+        with self.db.connection:
+            self.db.connection.execute(
+                "UPDATE trash_records SET status='failed', failure=? "
+                "WHERE id=? AND status='pending'",
+                (str(failure)[:1000], trash_id),
+            )
+
+    def _mark_restore_failure(self, trash_id: str, failure: Exception) -> None:
+        with self.db.connection:
+            self.db.connection.execute(
+                "UPDATE trash_records SET failure=? WHERE id=? AND status='active'",
+                (str(failure)[:1000], trash_id),
+            )
+
+    def _mark_request_failed(self, request_id: str, failure: Exception) -> None:
+        with self.db.connection:
+            self.db.connection.execute(
+                "UPDATE lifecycle_requests SET state='failed', failure=?, finished_at=? "
+                "WHERE id=? AND state='pending'",
+                (str(failure)[:1000], self._now(), request_id),
+            )
+
+    @staticmethod
+    def _raise_with_compensation(original: Exception, compensation_errors: list[Exception]) -> None:
+        if compensation_errors:
+            message = "; ".join(str(error) for error in compensation_errors)
+            raise RuntimeError(f"{original}; compensation failed: {message}") from original
+        raise original
+
+    def _compensate_moves(self, moves: list[tuple[Path, Path]]) -> list[Exception]:
+        """Best-effort reverse only the exact files that already moved."""
+
+        failures: list[Exception] = []
+        for original, moved in reversed(moves):
+            try:
+                self._move_exact(moved, original)
+            except Exception as exc:  # Keep attempting each independent exact file.
+                failures.append(exc)
+        return failures
 
     @staticmethod
     def _move_exact(source: Path, destination: Path) -> None:
@@ -368,17 +417,13 @@ class LibraryManager:
         trash_dir = self.trash_root / trash_id
         trash_source = trash_dir / self._trash_filename("source", source) if source else None
         trash_output = trash_dir / self._trash_filename("output", output) if output else None
-        if source and trash_source:
-            self._move_exact(source, trash_source)
-        if output and trash_output:
-            self._move_exact(output, trash_output)
         now = self._now()
         with self.db.connection:
             self.db.connection.execute(
                 "INSERT INTO trash_records("
                 "id,clip_id,target,original_source_path,original_output_path,"
-                "source_trash_path,output_trash_path,created_at,restored_at"
-                ") VALUES(?,?,?,?,?,?,?,?,NULL)",
+                "source_trash_path,output_trash_path,created_at,restored_at,status,failure"
+                ") VALUES(?,?,?,?,?,?,?,?,NULL,'pending',NULL)",
                 (
                     trash_id,
                     str(clip_id),
@@ -390,23 +435,57 @@ class LibraryManager:
                     now,
                 ),
             )
-            self.db.connection.execute(
-                "UPDATE clips SET state=?, output_available=?, updated_at=? WHERE id=?",
-                (
-                    ClipState.DELETED.value if source else row["state"],
-                    0 if output else int(bool(row["output_available"])),
-                    now,
-                    str(clip_id),
-                ),
+        try:
+            self._audit(
+                "library.trash_pending",
+                str(clip_id),
+                {"trash_id": trash_id, "target": target.value},
             )
-        return self._audit(
-            "library.trashed", str(clip_id), {"trash_id": trash_id, "target": target.value}
-        )
+        except Exception as exc:
+            self._mark_trash_failure(trash_id, exc)
+            raise
+
+        moves: list[tuple[Path, Path]] = []
+        try:
+            if source and trash_source:
+                self._move_exact(source, trash_source)
+                moves.append((source, trash_source))
+            if output and trash_output:
+                self._move_exact(output, trash_output)
+                moves.append((output, trash_output))
+            with self.db.connection:
+                self.db.connection.execute(
+                    "UPDATE trash_records SET status='active', failure=NULL "
+                    "WHERE id=? AND status='pending'",
+                    (trash_id,),
+                )
+                self.db.connection.execute(
+                    "UPDATE clips SET state=?, output_available=?, updated_at=? WHERE id=?",
+                    (
+                        ClipState.DELETED.value if source else row["state"],
+                        0 if output else int(bool(row["output_available"])),
+                        self._now(),
+                        str(clip_id),
+                    ),
+                )
+                return self._insert_audit(
+                    "library.trashed", str(clip_id), {"trash_id": trash_id, "target": target.value}
+                )
+        except Exception as exc:
+            compensation_errors = self._compensate_moves(moves)
+            self._mark_trash_failure(trash_id, exc)
+            with suppress(Exception):
+                self._audit(
+                    "library.trash_failed",
+                    str(clip_id),
+                    {"trash_id": trash_id, "failure": str(exc)[:1000]},
+                )
+            self._raise_with_compensation(exc, compensation_errors)
 
     def list_trash(self) -> list[TrashRecord]:
         rows = self.db.connection.execute(
             "SELECT id,clip_id,target,created_at,restored_at FROM trash_records "
-            "WHERE restored_at IS NULL ORDER BY created_at"
+            "WHERE status='active' AND restored_at IS NULL ORDER BY created_at"
         ).fetchall()
         return [TrashRecord.model_validate(dict(row)) for row in rows]
 
@@ -417,7 +496,8 @@ class LibraryManager:
 
     def restore(self, trash_id: str) -> ClipRecord:
         record = self.db.connection.execute(
-            "SELECT * FROM trash_records WHERE id=? AND restored_at IS NULL", (trash_id,)
+            "SELECT * FROM trash_records WHERE id=? AND status='active' AND restored_at IS NULL",
+            (trash_id,),
         ).fetchone()
         if record is None:
             raise KeyError(trash_id)
@@ -450,25 +530,47 @@ class LibraryManager:
             self._require_regular_file(output)
             if output_destination is None:
                 raise ValueError("invalid output trash record")
-        if source and source_destination:
-            self._move_exact(source, source_destination)
-        if output and output_destination:
-            self._move_exact(output, output_destination)
-        now = self._now()
-        state = (
-            ClipState.READY.value
-            if bool(row["output_available"]) or output
-            else ClipState.DISCOVERED.value
-        )
-        with self.db.connection:
-            self.db.connection.execute(
-                "UPDATE trash_records SET restored_at=? WHERE id=?", (now, trash_id)
+        moves: list[tuple[Path, Path]] = []
+        try:
+            self._audit("library.restore_pending", str(row["id"]), {"trash_id": trash_id})
+            if source and source_destination:
+                self._move_exact(source, source_destination)
+                moves.append((source, source_destination))
+            if output and output_destination:
+                self._move_exact(output, output_destination)
+                moves.append((output, output_destination))
+            now = self._now()
+            state = (
+                ClipState.READY.value
+                if bool(row["output_available"]) or output
+                else ClipState.DISCOVERED.value
             )
-            self.db.connection.execute(
-                "UPDATE clips SET state=?, output_available=?, updated_at=? WHERE id=?",
-                (state, int(bool(row["output_available"]) or output is not None), now, row["id"]),
-            )
-        self._audit("library.restored", str(row["id"]), {"trash_id": trash_id})
+            with self.db.connection:
+                self.db.connection.execute(
+                    "UPDATE trash_records SET restored_at=?, status='restored', failure=NULL "
+                    "WHERE id=?",
+                    (now, trash_id),
+                )
+                self.db.connection.execute(
+                    "UPDATE clips SET state=?, output_available=?, updated_at=? WHERE id=?",
+                    (
+                        state,
+                        int(bool(row["output_available"]) or output is not None),
+                        now,
+                        row["id"],
+                    ),
+                )
+                self._insert_audit("library.restored", str(row["id"]), {"trash_id": trash_id})
+        except Exception as exc:
+            compensation_errors = self._compensate_moves(moves)
+            self._mark_restore_failure(trash_id, exc)
+            with suppress(Exception):
+                self._audit(
+                    "library.restore_failed",
+                    str(row["id"]),
+                    {"trash_id": trash_id, "failure": str(exc)[:1000]},
+                )
+            self._raise_with_compensation(exc, compensation_errors)
         return self._clip_from_row(self._clip_row(str(row["id"])))
 
     @staticmethod
@@ -490,20 +592,64 @@ class LibraryManager:
         source_selected, output_selected = self._targets(target)
         source = self._source_path(row) if source_selected else None
         output = self._output_path(row) if output_selected else None
-        # Each unlink is an exact resolved file selected from this catalog row.
-        if source is not None:
-            source.unlink()
-        if output is not None:
-            output.unlink()
-        now = self._now()
+        request_id = str(uuid.uuid4())
+        details = {"target": target.value}
         with self.db.connection:
             self.db.connection.execute(
-                "UPDATE clips SET state=?, output_available=?, updated_at=? WHERE id=?",
+                "INSERT INTO lifecycle_requests("
+                "id,operation,clip_id,target,state,details,failure,created_at,finished_at"
+                ") VALUES(?,?,?,?,'pending',?,NULL,?,NULL)",
                 (
-                    ClipState.DELETED.value if source_selected else row["state"],
-                    0 if output_selected else int(bool(row["output_available"])),
-                    now,
+                    request_id,
+                    "permanent_delete",
                     str(clip_id),
+                    target.value,
+                    json.dumps(details, sort_keys=True),
+                    self._now(),
                 ),
             )
-        return self._audit("library.permanently_deleted", str(clip_id), {"target": target.value})
+        try:
+            self._audit(
+                "library.permanent_delete.pending",
+                str(clip_id),
+                {"request_id": request_id, **details},
+            )
+        except Exception as exc:
+            self._mark_request_failed(request_id, exc)
+            raise
+        try:
+            # Each unlink is an exact resolved file selected from this catalog row.
+            if source is not None:
+                source.unlink()
+            if output is not None:
+                output.unlink()
+            now = self._now()
+            with self.db.connection:
+                self.db.connection.execute(
+                    "UPDATE clips SET state=?, output_available=?, updated_at=? WHERE id=?",
+                    (
+                        ClipState.DELETED.value if source_selected else row["state"],
+                        0 if output_selected else int(bool(row["output_available"])),
+                        now,
+                        str(clip_id),
+                    ),
+                )
+                self.db.connection.execute(
+                    "UPDATE lifecycle_requests SET state='completed', finished_at=? "
+                    "WHERE id=? AND state='pending'",
+                    (now, request_id),
+                )
+                return self._insert_audit(
+                    "library.permanently_deleted",
+                    str(clip_id),
+                    {"request_id": request_id, **details},
+                )
+        except Exception as exc:
+            self._mark_request_failed(request_id, exc)
+            with suppress(Exception):
+                self._audit(
+                    "library.permanent_delete.failed",
+                    str(clip_id),
+                    {"request_id": request_id, "failure": str(exc)[:1000]},
+                )
+            raise

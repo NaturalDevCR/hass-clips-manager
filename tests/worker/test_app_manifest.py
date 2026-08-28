@@ -15,6 +15,8 @@ def test_app_manifest_uses_private_ingress_and_only_required_mounts() -> None:
     assert config["ingress_port"] == 8099
     assert config["ports"] == {}
     assert config["map"] == ["data:rw", "addon_config:rw", "media:rw"]
+    assert config["options"]["source_root"].startswith("/media/")
+    assert config["options"]["compiled_root"].startswith("/media/")
     assert not (APP / "build.yaml").exists()
 
 

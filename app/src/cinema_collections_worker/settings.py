@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 
 from .paths import RootKey
 
@@ -36,6 +36,7 @@ class AppOptions(BaseModel):
     hardware_acceleration: HardwareAcceleration = HardwareAcceleration.NONE
     source_root: Path = Path("/media/source")
     compiled_root: Path = Path("/media/compiled")
+    media_root: Path | None = None
     temp_root: Path | None = None
     assets_root: Path | None = None
 
@@ -52,6 +53,39 @@ class AppOptions(BaseModel):
         if not value.get_secret_value():
             raise ValueError("bearer_secret must not be empty")
         return value
+
+    @model_validator(mode="after")
+    def _media_roots_are_contained(self) -> AppOptions:
+        """Keep all user media below the one trusted container media mount."""
+
+        if self.mode is WorkerMode.APP:
+            media_root = Path("/media")
+        else:
+            if self.media_root is None:
+                raise ValueError("external mode requires an explicit media_root")
+            media_root = self.media_root
+        canonical_media_root = self._canonical_root(media_root, "media_root")
+        if canonical_media_root == Path("/"):
+            raise ValueError("media_root must not be the filesystem root")
+        self._require_descendant(self.source_root, canonical_media_root, "source_root")
+        self._require_descendant(self.compiled_root, canonical_media_root, "compiled_root")
+        return self
+
+    @staticmethod
+    def _canonical_root(path: Path, name: str) -> Path:
+        if not path.is_absolute():
+            raise ValueError(f"{name} must be absolute")
+        return path.resolve(strict=False)
+
+    @classmethod
+    def _require_descendant(cls, path: Path, root: Path, name: str) -> None:
+        candidate = cls._canonical_root(path, name)
+        if candidate == root:
+            raise ValueError(f"{name} must be a descendant of media_root")
+        try:
+            candidate.relative_to(root)
+        except ValueError as exc:
+            raise ValueError(f"{name} must be contained by media_root") from exc
 
 
 class WorkerSettings(BaseModel):
@@ -109,9 +143,7 @@ class Settings:
             raise ValueError(f"unable to read Worker options: {path.name}") from exc
         try:
             raw: Any = (
-                json.loads(raw_text)
-                if path.suffix.lower() == ".json"
-                else yaml.safe_load(raw_text)
+                json.loads(raw_text) if path.suffix.lower() == ".json" else yaml.safe_load(raw_text)
             )
             options = AppOptions.model_validate(raw or {})
         except Exception as exc:

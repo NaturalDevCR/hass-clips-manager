@@ -115,6 +115,31 @@ class Database:
             """)
             self.connection.execute("INSERT INTO schema_migrations VALUES (4, datetime('now'))")
             self.connection.commit()
+        if not self.connection.execute(
+            "SELECT 1 FROM schema_migrations WHERE version=5"
+        ).fetchone():
+            # Pending records are persisted before a multi-file move or an
+            # irreversible unlink, so restart/recovery tooling has evidence of
+            # every operation even when the filesystem reports an error.
+            self.connection.executescript("""
+                ALTER TABLE trash_records ADD COLUMN status TEXT NOT NULL DEFAULT 'active';
+                ALTER TABLE trash_records ADD COLUMN failure TEXT;
+                CREATE TABLE lifecycle_requests (
+                    id TEXT PRIMARY KEY,
+                    operation TEXT NOT NULL,
+                    clip_id TEXT NOT NULL,
+                    target TEXT NOT NULL,
+                    state TEXT NOT NULL,
+                    details TEXT NOT NULL,
+                    failure TEXT,
+                    created_at TEXT NOT NULL,
+                    finished_at TEXT,
+                    FOREIGN KEY(clip_id) REFERENCES clips(id)
+                );
+                CREATE INDEX lifecycle_requests_clip_index ON lifecycle_requests(clip_id, created_at);
+            """)
+            self.connection.execute("INSERT INTO schema_migrations VALUES (5, datetime('now'))")
+            self.connection.commit()
 
     def close(self) -> None:
         self.connection.close()

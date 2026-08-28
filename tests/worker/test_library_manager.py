@@ -43,6 +43,19 @@ def _upload(name: str, data: bytes) -> UploadFile:
     return UploadFile(filename=name, file=BytesIO(data))
 
 
+def _clip_with_output(db: Database, manager: LibraryManager, compiled: Path) -> tuple[object, Path]:
+    clip = manager.import_clip("films", _upload("one.mp4", b"source"))
+    output = compiled / "films" / "one.mp4"
+    output.parent.mkdir(parents=True)
+    output.write_bytes(b"output")
+    with db.connection:
+        db.connection.execute(
+            "UPDATE clips SET relative_output_path=?, output_available=1 WHERE id=?",
+            ("films/one.mp4", str(clip.id)),
+        )
+    return clip, output
+
+
 def test_import_rejects_unsupported_or_oversized_uploads_without_writing(tmp_path: Path) -> None:
     _db, manager, source, _compiled = _manager(tmp_path)
 
@@ -103,6 +116,96 @@ def test_trash_restore_is_recoverable_and_never_automatically_purged(tmp_path: P
     assert db.connection.execute(
         "SELECT restored_at FROM trash_records WHERE id=?", (trash_id,)
     ).fetchone()[0]
+
+
+def test_trash_move_failure_compensates_files_and_retains_pending_audit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db, manager, source, compiled = _manager(tmp_path)
+    clip, output = _clip_with_output(db, manager, compiled)
+    original_move = manager._move_exact
+
+    def fail_output_move(source_path: Path, destination: Path) -> None:
+        if destination.name == "output.mp4":
+            raise OSError("injected output move failure")
+        original_move(source_path, destination)
+
+    monkeypatch.setattr(manager, "_move_exact", fail_output_move)
+
+    with pytest.raises(OSError, match="injected output move failure"):
+        manager.move_to_trash(str(clip.id), TrashTarget.BOTH)
+
+    record = db.connection.execute(
+        "SELECT status, failure FROM trash_records WHERE clip_id=?", (str(clip.id),)
+    ).fetchone()
+    assert (source / "films" / "one.mp4").read_bytes() == b"source"
+    assert output.read_bytes() == b"output"
+    assert record["status"] == "failed" and "injected" in record["failure"]
+    assert (
+        db.connection.execute(
+            "SELECT count(*) FROM audit_events WHERE action_type='library.trash_pending'"
+        ).fetchone()[0]
+        == 1
+    )
+
+
+def test_restore_failure_rolls_back_all_files_and_leaves_trash_active(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db, manager, source, compiled = _manager(tmp_path)
+    clip, output = _clip_with_output(db, manager, compiled)
+    trash_id = manager.move_to_trash(str(clip.id), TrashTarget.BOTH).details["trash_id"]
+    original_move = manager._move_exact
+
+    def fail_output_restore(source_path: Path, destination: Path) -> None:
+        if destination == output:
+            raise OSError("injected output restore failure")
+        original_move(source_path, destination)
+
+    monkeypatch.setattr(manager, "_move_exact", fail_output_restore)
+
+    with pytest.raises(OSError, match="injected output restore failure"):
+        manager.restore(trash_id)
+
+    record = db.connection.execute(
+        "SELECT status, restored_at FROM trash_records WHERE id=?", (trash_id,)
+    ).fetchone()
+    assert not (source / "films" / "one.mp4").exists()
+    assert not output.exists()
+    assert (manager.trash_root / trash_id / "source.mp4").read_bytes() == b"source"
+    assert (manager.trash_root / trash_id / "output.mp4").read_bytes() == b"output"
+    assert record["status"] == "active" and record["restored_at"] is None
+
+
+def test_permanent_delete_failure_keeps_durable_pending_request_and_audit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db, manager, _source, compiled = _manager(tmp_path)
+    clip, output = _clip_with_output(db, manager, compiled)
+    original_unlink = Path.unlink
+
+    def fail_output_unlink(path: Path, *args: object, **kwargs: object) -> None:
+        if path == output:
+            raise OSError("injected output unlink failure")
+        original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_output_unlink)
+    token = manager.delete_confirmation_token(clip.id, DeleteTarget.BOTH)
+
+    with pytest.raises(OSError, match="injected output unlink failure"):
+        manager.permanently_delete(str(clip.id), DeleteTarget.BOTH, token)
+
+    request = db.connection.execute(
+        "SELECT state, failure FROM lifecycle_requests WHERE clip_id=?", (str(clip.id),)
+    ).fetchone()
+    assert request["state"] == "failed" and "injected" in request["failure"]
+    assert output.exists()
+    assert (
+        db.connection.execute(
+            "SELECT count(*) FROM audit_events WHERE action_type='library.permanent_delete.pending'"
+        ).fetchone()[0]
+        == 1
+    )
 
 
 @pytest.mark.parametrize(
