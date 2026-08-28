@@ -31,8 +31,13 @@
       async function act(url, options = {}) {
         options.headers = {...(options.headers || {}), 'X-CSRF-Token': window.managerCsrf};
         const response = await fetch(url, options);
-        const body = await response.json();
-        if (!response.ok) throw new Error(body.message || 'Action failed');
+        const text = await response.text();
+        let body = null;
+        try { body = text ? JSON.parse(text) : null; } catch { body = null; }
+        if (!response.ok) {
+          const detail = body && body.message ? body.message : `Request failed (HTTP ${response.status})`;
+          throw new Error(detail);
+        }
         return body;
       }
       document.getElementById('upload-form').addEventListener('submit', async event => {
@@ -40,7 +45,7 @@
         const data = new FormData(event.currentTarget);
         const file = data.get('file');
         try {
-          await act(`/manager/upload?collection_id=${encodeURIComponent(data.get('collection'))}`, {
+          await act(`manager/upload?collection_id=${encodeURIComponent(data.get('collection'))}`, {
             method: 'POST', headers: {'X-Filename': file.name}, body: file
           });
           location.reload();
@@ -54,7 +59,7 @@
           options.headers = {'Content-Type': 'application/json'};
           options.body = JSON.stringify({target: 'source'});
         }
-        try { await act(`/manager/clips/${id}/${action}`, options); location.reload(); }
+        try { await act(`manager/clips/${id}/${action}`, options); location.reload(); }
         catch (error) { result.textContent = error.message; }
       }));
     </script>

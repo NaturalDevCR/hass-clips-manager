@@ -79,6 +79,24 @@ def test_manager_requires_ingress_or_bearer_and_rejects_missing_csrf(tmp_path: P
     assert csrf
 
 
+def test_manager_page_only_uses_ingress_safe_relative_action_urls(tmp_path: Path) -> None:
+    # Home Assistant Ingress serves this page under a per-install path prefix
+    # (e.g. /api/hassio_ingress/<token>/). A client-side fetch() call to an
+    # absolute path (leading "/") resolves against the domain root instead of
+    # that prefix and never reaches this app. Every action URL the page's
+    # script builds must therefore be relative, matching the working
+    # stylesheet <link> reference.
+    client = TestClient(_app(tmp_path))
+    csrf = _manager_session(client)
+    assert csrf
+
+    html = client.get("/", headers={"X-Ingress-Path": "/api/hassio_ingress/session"}).text
+
+    assert "fetch(`/manager" not in html
+    assert "`manager/upload?collection_id=" in html
+    assert "`manager/clips/${id}/${action}`" in html
+
+
 def test_external_manager_requires_bearer_before_issuing_session(tmp_path: Path) -> None:
     client = TestClient(_app(tmp_path, mode=WorkerMode.EXTERNAL))
 
