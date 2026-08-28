@@ -36,10 +36,43 @@
         <p class="field-hint">Use the collection's short ID (shown in the Collection column below), not a folder path.</p>
         <p id="scan-result" role="status"></p>
       </section>
+      <section>
+        <h2>Create a collection folder</h2>
+        <form id="directory-form">
+          <label>Collection ID <input name="collection" required placeholder="e.g. regular"></label>
+          <label>Folder <input name="path" required placeholder="e.g. organized"></label>
+          <button type="submit">Create folder</button>
+        </form>
+        <p class="field-hint">Creates an empty folder inside the collection's configured source directory.</p>
+        <p id="directory-result" role="status"></p>
+      </section>
+      <section>
+        <h2>Intro/outro assets</h2>
+        <p>Intro and outro files live in the Worker's private assets storage. Upload them
+          here, then reference the exact filename shown below in the processing profile's
+          intro/outro fields.</p>
+        <form id="asset-upload-form">
+          <label>Video <input name="file" type="file" accept="video/*" required></label>
+          <button type="submit">Upload asset</button>
+        </form>
+        <div id="asset-progress" class="upload-progress" hidden>
+          <div class="upload-progress-bar"><div id="asset-progress-fill" class="upload-progress-fill"></div></div>
+          <p id="asset-progress-label" class="upload-progress-label"></p>
+        </div>
+        <p id="asset-result" role="status"></p>
+        <ul id="asset-list"></ul>
+      </section>
       <table>
         <thead><tr><th>Collection</th><th>Source</th><th>State</th><th>Clip ID</th><th>Actions</th></tr></thead>
         <tbody>{{ clip_rows }}</tbody>
       </table>
+      <section>
+        <h2>Trash</h2>
+        <table id="trash-table">
+          <thead><tr><th>Clip ID</th><th>Target</th><th>Trashed at</th><th></th></tr></thead>
+          <tbody><tr><td colspan="4">Trash is empty.</td></tr></tbody>
+        </table>
+      </section>
     </main>
     <script>
       window.managerCsrf = document.querySelector('meta[name="csrf-token"]').content;
@@ -197,32 +230,217 @@
         }
       });
 
-      document.querySelectorAll('[data-action]').forEach(button => button.addEventListener('click', async () => {
+      async function deleteClip(id, row) {
+        const target = row.querySelector('.delete-target').value;
+        try {
+          const info = await act(`manager/clips/${id}/delete-confirmation?target=${target}`);
+          const sourcePath = row.querySelector('td:nth-child(2)').textContent;
+          const outputPath = row.dataset.outputPath || '(no compiled output)';
+          const affected = target === 'source'
+            ? `Source: ${sourcePath}`
+            : target === 'output'
+              ? `Compiled output: ${outputPath}`
+              : `Source: ${sourcePath}\nCompiled output: ${outputPath}`;
+          if (!window.confirm(`${info.warning}\n${affected}`)) return;
+          await act(`manager/clips/${id}/delete`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({target, confirmation: info.confirmation}),
+          });
+          location.reload();
+        } catch (error) { result.textContent = error.message; }
+      }
+
+      document.querySelectorAll('[data-action]').forEach(button => button.addEventListener('click', () => {
         const row = button.closest('[data-clip-id]');
         const id = row.dataset.clipId;
         const action = button.dataset.action;
+        if (action === 'edit-toggle' || action === 'move-toggle') {
+          const form = row.querySelector(action === 'edit-toggle' ? '.edit-form' : '.move-form');
+          form.hidden = !form.hidden;
+          return;
+        }
+        if (action === 'delete') {
+          deleteClip(id, row);
+          return;
+        }
         const options = {method: 'POST'};
         if (action === 'trash') {
           options.headers = {'Content-Type': 'application/json'};
-          options.body = JSON.stringify({target: 'source'});
+          options.body = JSON.stringify({target: row.querySelector('.trash-target').value});
         }
         const actionsCell = button.closest('td');
+        (async () => {
+          try {
+            const response = await act(`manager/clips/${id}/${action}`, options);
+            const jobId = (action === 'scan' || action === 'recompile')
+              ? jobIdFromDetails(response && response.details)
+              : null;
+            if (jobId) {
+              actionsCell.innerHTML = '<span class="row-progress">Queued…</span>';
+              const label = actionsCell.querySelector('.row-progress');
+              await pollJob(jobId, job => {
+                const pct = Math.round((job.progress && job.progress.percent) || 0);
+                label.textContent = `${job.progress.stage} ${pct}%`;
+              });
+            }
+            location.reload();
+          } catch (error) { result.textContent = error.message; }
+        })();
+      }));
+
+      document.querySelectorAll('.row-form').forEach(form => form.addEventListener('submit', async event => {
+        event.preventDefault();
+        const row = form.closest('[data-clip-id]');
+        const id = row.dataset.clipId;
+        const data = new FormData(form);
         try {
-          const response = await act(`manager/clips/${id}/${action}`, options);
-          const jobId = (action === 'scan' || action === 'recompile')
-            ? jobIdFromDetails(response && response.details)
-            : null;
-          if (jobId) {
-            actionsCell.innerHTML = '<span class="row-progress">Queued…</span>';
-            const label = actionsCell.querySelector('.row-progress');
-            await pollJob(jobId, job => {
-              const pct = Math.round((job.progress && job.progress.percent) || 0);
-              label.textContent = `${job.progress.stage} ${pct}%`;
+          if (form.classList.contains('edit-form')) {
+            const tags = String(data.get('tags') || '')
+              .split(',').map(tag => tag.trim()).filter(Boolean);
+            const notes = String(data.get('notes') || '').trim() || null;
+            await act(`manager/clips/${id}/metadata`, {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({tags, notes}),
+            });
+          } else {
+            await act(`manager/clips/${id}/move`, {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({destination_relative_path: String(data.get('destination') || '')}),
             });
           }
           location.reload();
         } catch (error) { result.textContent = error.message; }
       }));
+
+      document.getElementById('directory-form').addEventListener('submit', async event => {
+        event.preventDefault();
+        const directoryResult = document.getElementById('directory-result');
+        const data = new FormData(event.currentTarget);
+        const collection = String(data.get('collection') || '').trim();
+        const path = String(data.get('path') || '').trim();
+        directoryResult.classList.remove('is-error');
+        if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(collection)) {
+          directoryResult.classList.add('is-error');
+          directoryResult.textContent = 'That looks like a folder path, not a collection ID. '
+            + 'Enter the collection\'s short ID (e.g. "regular") from the table below.';
+          return;
+        }
+        const id = encodeURIComponent(collection);
+        const button = event.currentTarget.querySelector('button[type="submit"]');
+        button.disabled = true;
+        try {
+          await act(`manager/collections/${id}/directories`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({relative_path: path}),
+          });
+          directoryResult.textContent = `Folder "${path}" created.`;
+          button.disabled = false;
+        } catch (error) {
+          directoryResult.classList.add('is-error');
+          directoryResult.textContent = error.message;
+          button.disabled = false;
+        }
+      });
+
+      async function refreshTrash() {
+        const tbody = document.querySelector('#trash-table tbody');
+        let entries;
+        try {
+          entries = await act('manager/trash');
+        } catch {
+          tbody.innerHTML = '<tr><td colspan="4">Trash unavailable.</td></tr>';
+          return;
+        }
+        if (!entries || entries.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="4">Trash is empty.</td></tr>';
+          return;
+        }
+        tbody.textContent = '';
+        entries.forEach(entry => {
+          const id = entry.id;
+          const row = document.createElement('tr');
+          [entry.clip_id, entry.target, entry.created_at].forEach(value => {
+            const cell = document.createElement('td');
+            cell.textContent = value;
+            row.appendChild(cell);
+          });
+          const actionCell = document.createElement('td');
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.textContent = 'Restore';
+          button.addEventListener('click', async () => {
+            try {
+              await act(`manager/trash/${id}/restore`, {method: 'POST'});
+              location.reload();
+            } catch (error) { result.textContent = error.message; }
+          });
+          actionCell.appendChild(button);
+          row.appendChild(actionCell);
+          tbody.appendChild(row);
+        });
+      }
+      refreshTrash();
+
+      async function refreshAssets() {
+        const list = document.getElementById('asset-list');
+        let assets;
+        try {
+          assets = await act('manager/assets');
+        } catch {
+          return;
+        }
+        list.textContent = '';
+        if (!assets || assets.length === 0) {
+          const item = document.createElement('li');
+          item.textContent = 'No assets uploaded yet.';
+          list.appendChild(item);
+          return;
+        }
+        assets.forEach(name => {
+          const item = document.createElement('li');
+          const code = document.createElement('code');
+          code.textContent = name;
+          item.appendChild(code);
+          list.appendChild(item);
+        });
+      }
+      refreshAssets();
+
+      document.getElementById('asset-upload-form').addEventListener('submit', async event => {
+        event.preventDefault();
+        const form = event.currentTarget;
+        const data = new FormData(form);
+        const file = data.get('file');
+        if (!(file instanceof File) || file.size === 0) return;
+        const assetResult = document.getElementById('asset-result');
+        const assetWrap = document.getElementById('asset-progress');
+        const assetFill = document.getElementById('asset-progress-fill');
+        const assetLabel = document.getElementById('asset-progress-label');
+        assetResult.classList.remove('is-error');
+        assetResult.textContent = '';
+        form.querySelector('button[type="submit"]').disabled = true;
+        assetWrap.hidden = false;
+        assetLabel.textContent = `Uploading ${file.name}`;
+        try {
+          await uploadWithProgress('manager/upload-asset', file, fraction => {
+            assetFill.style.width = `${Math.round(fraction * 100)}%`;
+          });
+          assetWrap.hidden = true;
+          assetFill.style.width = '0%';
+          form.reset();
+          assetResult.textContent = `Uploaded ${file.name}.`;
+          refreshAssets();
+        } catch (error) {
+          assetWrap.hidden = true;
+          assetResult.classList.add('is-error');
+          assetResult.textContent = error.message;
+        }
+        form.querySelector('button[type="submit"]').disabled = false;
+      });
     </script>
   </body>
 </html>

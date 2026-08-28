@@ -29,11 +29,19 @@ def _manager(
     source = tmp_path / "source"
     compiled = tmp_path / "compiled"
     temp = tmp_path / "temp"
-    for root in (source, compiled, temp):
+    assets = tmp_path / "assets"
+    for root in (source, compiled, temp, assets):
         root.mkdir()
     manager = LibraryManager(
         db,
-        SafePathResolver({RootKey.SOURCE: source, RootKey.COMPILED: compiled, RootKey.TEMP: temp}),
+        SafePathResolver(
+            {
+                RootKey.SOURCE: source,
+                RootKey.COMPILED: compiled,
+                RootKey.TEMP: temp,
+                RootKey.ASSETS: assets,
+            }
+        ),
         max_upload_bytes=max_upload_bytes,
     )
     return db, manager, source, compiled
@@ -235,6 +243,36 @@ def test_permanent_delete_both_compensates_if_second_target_cannot_be_staged(
     assert output.read_bytes() == b"output"
     row = db.connection.execute("SELECT state FROM clips WHERE id=?", (str(clip.id),)).fetchone()
     assert row["state"] == "discovered"
+
+
+def test_import_asset_rejects_unsafe_filenames_and_disallowed_extensions(
+    tmp_path: Path,
+) -> None:
+    _db, manager, _source, _compiled = _manager(tmp_path)
+    assets = manager.resolver.roots[RootKey.ASSETS]
+
+    with pytest.raises(ValueError):
+        manager.import_asset(_upload("../intro.mp4", b"clip"))
+    with pytest.raises(ValueError, match="extension"):
+        manager.import_asset(_upload("notes.txt", b"clip"))
+
+    assert manager.list_assets() == []
+    assert list(assets.iterdir()) == []
+
+
+def test_import_and_list_assets_are_flat_in_the_assets_root(tmp_path: Path) -> None:
+    _db, manager, _source, _compiled = _manager(tmp_path)
+    assets = manager.resolver.roots[RootKey.ASSETS]
+
+    event = manager.import_asset(_upload("intro.mp4", b"clip"))
+    manager.import_asset(_upload("outro.mp4", b"clip"))
+
+    assert event.action_type == "library.asset_imported"
+    assert event.details["filename"] == "intro.mp4"
+    assert (assets / "intro.mp4").read_bytes() == b"clip"
+    assert manager.list_assets() == ["intro.mp4", "outro.mp4"]
+    with pytest.raises(ValueError, match="already exists"):
+        manager.import_asset(_upload("intro.mp4", b"clip"))
 
 
 @pytest.mark.parametrize(

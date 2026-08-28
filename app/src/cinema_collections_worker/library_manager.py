@@ -324,6 +324,46 @@ class LibraryManager:
         self._audit("library.imported", clip_id, {"collection_id": collection_id, "filename": name})
         return self._clip_from_row(self._clip_row(clip_id))
 
+    def import_asset(self, upload: UploadFile) -> AuditEvent:
+        """Store one intro/outro asset file flat in the Worker assets root."""
+
+        name = validate_filename(upload.filename)
+        if Path(name).suffix.lower() not in _VIDEO_EXTENSIONS:
+            raise ValueError("unsupported upload extension")
+        destination = self.resolver.resolve(RootKey.ASSETS.value, name)
+        if destination.exists() or destination.is_symlink():
+            raise ValueError("destination already exists")
+        # Stage in the Worker temp root first, like clip uploads, so a rejected
+        # upload never leaves a partially imported asset behind.
+        staging_root = self.resolver.roots.get(RootKey.TEMP, self.trash_root) / "uploads"
+        staging = staging_root / f"{uuid.uuid4().hex}.uploading"
+        written = 0
+        try:
+            staging.parent.mkdir(parents=True, exist_ok=True)
+            with staging.open("xb") as handle:
+                while block := upload.file.read(1024 * 1024):
+                    written += len(block)
+                    if written > self.max_upload_bytes:
+                        raise ValueError("upload exceeds configured size limit")
+                    handle.write(block)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            self._move_exact(staging, destination)
+        except Exception:
+            if staging.exists():
+                staging.unlink()
+            raise
+        return self._audit("library.asset_imported", name, {"filename": name})
+
+    def list_assets(self) -> list[str]:
+        """List filenames currently present directly under the assets root."""
+
+        root = self.resolver.roots.get(RootKey.ASSETS)
+        if root is None or not root.is_dir():
+            return []
+        return sorted(
+            path.name for path in root.iterdir() if path.is_file() and not path.is_symlink()
+        )
+
     def create_collection_directory(self, collection_id: str, relative_path: str) -> AuditEvent:
         """Create one approved subdirectory inside a configured collection root."""
 

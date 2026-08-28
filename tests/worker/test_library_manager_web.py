@@ -94,8 +94,20 @@ def test_manager_page_only_uses_ingress_safe_relative_action_urls(tmp_path: Path
 
     assert "/manager/upload" not in html
     assert "/manager/clips" not in html
+    assert "/manager/trash" not in html
+    assert "/manager/assets" not in html
+    assert "/manager/collections" not in html
     assert "`manager/upload?collection_id=" in html
     assert "`manager/clips/${id}/${action}`" in html
+    assert "`manager/clips/${id}/delete-confirmation?target=${target}`" in html
+    assert "`manager/clips/${id}/delete`" in html
+    assert "`manager/clips/${id}/metadata`" in html
+    assert "`manager/clips/${id}/move`" in html
+    assert "`manager/collections/${id}/directories`" in html
+    assert "'manager/trash'" in html
+    assert "`manager/trash/${id}/restore`" in html
+    assert "'manager/upload-asset'" in html
+    assert "'manager/assets'" in html
 
 
 def test_manager_page_supports_multi_file_upload_with_cache_busted_stylesheet(
@@ -157,6 +169,62 @@ def test_external_manager_requires_bearer_before_issuing_session(tmp_path: Path)
 
     assert client.get("/", headers={"X-Ingress-Path": "/forged"}).status_code == 401
     assert _manager_session(client, ingress=False)
+
+
+def test_manager_asset_upload_and_listing_round_trip(tmp_path: Path) -> None:
+    client = TestClient(_app(tmp_path))
+    csrf = _manager_session(client)
+    headers = {"X-CSRF-Token": csrf}
+
+    assert client.get("/manager/assets").json() == []
+
+    uploaded = client.post(
+        "/manager/upload-asset",
+        headers={**headers, "X-Filename": "intro.mp4"},
+        content=b"clip",
+    )
+    assert uploaded.status_code == 201
+    assert uploaded.json()["details"]["filename"] == "intro.mp4"
+
+    listed = client.get("/manager/assets")
+    assert listed.status_code == 200
+    assert listed.json() == ["intro.mp4"]
+
+    rejected = client.post(
+        "/manager/upload-asset",
+        headers={"X-Filename": "notes.txt"},
+        content=b"clip",
+    )
+    assert rejected.status_code == 403
+
+    html = client.get("/", headers={"X-Ingress-Path": "/api/hassio_ingress/session"}).text
+    assert 'id="asset-upload-form"' in html
+    assert 'id="asset-list"' in html
+
+
+def test_manager_page_renders_full_clip_row_actions(tmp_path: Path) -> None:
+    client = TestClient(_app(tmp_path))
+    _seed_collection(client)
+    csrf = _manager_session(client)
+    headers = {"X-CSRF-Token": csrf}
+    uploaded = client.post(
+        "/manager/upload?collection_id=films",
+        headers={**headers, "X-Filename": "clip.mp4"},
+        content=b"clip",
+    )
+    assert uploaded.status_code == 201
+
+    html = client.get("/", headers={"X-Ingress-Path": "/api/hassio_ingress/session"}).text
+
+    assert 'data-action="trash"' in html
+    assert 'class="trash-target"' in html
+    assert 'data-action="edit-toggle"' in html
+    assert 'data-action="move-toggle"' in html
+    assert 'data-action="delete"' in html
+    assert 'class="row-form edit-form"' in html
+    assert 'class="row-form move-form"' in html
+    assert 'id="directory-form"' in html
+    assert 'id="trash-table"' in html
 
 
 def test_manager_routes_complete_exact_clip_lifecycle(tmp_path: Path) -> None:

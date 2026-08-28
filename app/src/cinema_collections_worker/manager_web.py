@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hmac
 import html
+import json
 import secrets
 import time
 from io import BytesIO
@@ -102,27 +103,60 @@ def _require_action(request: Request, csrf: str | None) -> LibraryManager:
     return request.app.state.library_manager
 
 
+def _render_clip_row(row: Any) -> str:
+    metadata = json.loads(row["metadata"] or "{}")
+    tags = ", ".join(metadata.get("tags") or [])
+    notes = str(metadata.get("notes") or "")
+    output_value = row["relative_output_path"] or ""
+    # An unavailable output cannot be trashed or deleted, so disable those
+    # options in both target selectors.
+    target_option = (
+        '<option value="source">Source</option><option value="output">Output</option>'
+        '<option value="both">Both</option>'
+        if bool(row["output_available"])
+        else '<option value="source">Source</option>'
+    )
+    return (
+        '<tr data-clip-id="{id}" data-output-path="{output}">'
+        "<td>{collection}</td><td>{source}</td><td>{state}</td><td><code>{id}</code></td>"
+        '<td class="actions">'
+        '<button data-action="scan">Scan</button> '
+        '<button data-action="recompile">Recompile</button> '
+        '<select class="trash-target" title="Trash target">{targets}</select> '
+        '<button data-action="trash">Trash</button> '
+        '<select class="delete-target" title="Delete target">{targets}</select> '
+        '<button data-action="delete">Delete</button> '
+        '<button data-action="edit-toggle">Edit</button> '
+        '<button data-action="move-toggle">Move</button>'
+        '<form class="row-form edit-form" hidden>'
+        '<input name="tags" value="{tags}" placeholder="tags, comma, separated">'
+        '<textarea name="notes" placeholder="Notes">{notes}</textarea>'
+        '<button type="submit">Save</button></form>'
+        '<form class="row-form move-form" hidden>'
+        '<input name="destination" value="{source}" required>'
+        '<button type="submit">Move</button></form>'
+        "</td></tr>".format(
+            id=html.escape(str(row["id"]), quote=True),
+            collection=html.escape(str(row["collection_id"])),
+            source=html.escape(str(row["relative_source_path"]), quote=True),
+            state=html.escape(str(row["state"])),
+            output=html.escape(str(output_value), quote=True),
+            tags=html.escape(tags, quote=True),
+            notes=html.escape(notes),
+            targets=target_option,
+        )
+    )
+
+
 def _render_manager(request: Request, csrf: str) -> str:
     database = request.app.state.database
     rows = database.connection.execute(
-        "SELECT id, collection_id, relative_source_path, state FROM clips "
+        "SELECT id, collection_id, relative_source_path, relative_output_path, state, "
+        "output_available, metadata FROM clips "
         "WHERE state <> 'deleted' ORDER BY updated_at DESC, id DESC"
     ).fetchall()
     clip_rows = (
-        "".join(
-            '<tr data-clip-id="{}"><td>{}</td><td>{}</td><td>{}</td>'
-            '<td><code>{}</code></td><td class="actions">'
-            '<button data-action="scan">Scan</button> '
-            '<button data-action="recompile">Recompile</button> '
-            '<button data-action="trash">Trash source</button></td></tr>'.format(
-                html.escape(str(row["id"]), quote=True),
-                html.escape(str(row["collection_id"])),
-                html.escape(str(row["relative_source_path"])),
-                html.escape(str(row["state"])),
-                html.escape(str(row["id"])),
-            )
-            for row in rows
-        )
+        "".join(_render_clip_row(row) for row in rows)
         or '<tr><td colspan="5">No catalogued clips yet.</td></tr>'
     )
     template = (
@@ -200,6 +234,23 @@ def install_manager_routes(app: FastAPI, settings: WorkerSettings) -> None:
         content = await request.body()
         uploaded = UploadFile(file=BytesIO(content), filename=filename)
         return _dump(manager.import_clip(collection_id, uploaded))
+
+    @app.post("/manager/upload-asset", status_code=201, include_in_schema=False)
+    async def upload_asset(
+        request: Request,
+        filename: Annotated[str, Header(alias="X-Filename")],
+        csrf: Annotated[str | None, Header(alias="X-CSRF-Token")] = None,
+    ) -> Any:
+        manager = _require_action(request, csrf)
+        content = await request.body()
+        uploaded = UploadFile(file=BytesIO(content), filename=filename)
+        return _dump(manager.import_asset(uploaded))
+
+    @app.get("/manager/assets", include_in_schema=False)
+    def list_assets(request: Request) -> list[str]:
+        if not _initial_auth_is_valid(request, settings):
+            raise HTTPException(status_code=401, detail="Library Manager authentication required")
+        return request.app.state.library_manager.list_assets()
 
     @app.post(
         "/manager/collections/{collection_id}/directories",
