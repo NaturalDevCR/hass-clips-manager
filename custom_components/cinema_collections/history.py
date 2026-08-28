@@ -7,7 +7,6 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta
 from random import SystemRandom
-from types import MappingProxyType
 from typing import Any, cast
 
 from homeassistant.core import HomeAssistant
@@ -184,24 +183,24 @@ class PlaybackHistoryStore:
             return ResetResult(reset_ids, local_now)
 
     def snapshot(self) -> Mapping[str, Mapping[str, Any]]:
-        """Return an immutable per-collection history summary without mutating state.
+        """Return a fresh per-collection history summary without mutating state.
 
         The snapshot exposes the played-clip count instead of the full clip-ID
-        list so entity attributes stay bounded regardless of round size.
+        list so entity attributes stay bounded regardless of round size. Every
+        level is a plain dict (never MappingProxyType): Home Assistant's state
+        serializer (orjson) rejects mappingproxy values outright, including
+        nested ones, and this snapshot is consumed directly as sensor entity
+        attributes.
         """
-        return MappingProxyType(
-            {
-                collection_id: MappingProxyType(
-                    {
-                        "round_number": record["round_number"],
-                        "played_count": len(record["played_clip_ids"]),
-                        "last_selected_clip_id": record["last_selected_clip_id"],
-                        "last_reset_at": record["last_reset_at"],
-                    }
-                )
-                for collection_id, record in self._data["collections"].items()
+        return {
+            collection_id: {
+                "round_number": record["round_number"],
+                "played_count": len(record["played_clip_ids"]),
+                "last_selected_clip_id": record["last_selected_clip_id"],
+                "last_reset_at": record["last_reset_at"],
             }
-        )
+            for collection_id, record in self._data["collections"].items()
+        }
 
     async def _async_daily_reset(self, now: datetime) -> None:
         """Reconcile the local-date boundary registered with Home Assistant."""

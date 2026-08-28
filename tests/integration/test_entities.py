@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
+import orjson
 import pytest
 from homeassistant.util import dt as dt_util
 
@@ -261,6 +262,11 @@ async def test_active_collection_sensor_exposes_playback_history_summary(hass) -
         "last_reset_at": dt_util.as_local(datetime(2026, 8, 27, 20, tzinfo=UTC)).isoformat(),
     }
     assert sensor.extra_state_attributes["history"] == dict(coordinator.data.history)
+    # Home Assistant serializes entity attributes with orjson (websocket API,
+    # recorder, REST) before this repository's own tests ever see them; a
+    # value that only fails at that layer (e.g. a nested MappingProxyType)
+    # would pass a plain equality assertion but break in a real installation.
+    orjson.dumps(sensor.extra_state_attributes)
 
 
 @pytest.mark.asyncio
