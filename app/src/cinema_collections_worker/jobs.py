@@ -195,9 +195,6 @@ class JobService:
             # historical and may deliberately lag a configuration update.
             profile_fingerprint_value = current_profile_fingerprint
             estimated_bytes = int(metadata.get("size_bytes") or 0)
-            if remaining_bytes - estimated_bytes < self.disk_reserve_bytes:
-                raise ValueError("insufficient disk space for compilation")
-            remaining_bytes -= estimated_bytes
             source_relative = str(clip["relative_source_path"])
             output_relative = str(
                 clip["relative_output_path"] or f"{request.collection_id}/{clip['id']}.mp4"
@@ -226,6 +223,9 @@ class JobService:
                 and self.queue.has_succeeded(job.fingerprint)
             ):
                 continue
+            if remaining_bytes - estimated_bytes < self.disk_reserve_bytes:
+                raise ValueError("insufficient disk space for compilation")
+            remaining_bytes -= estimated_bytes
             jobs.append(self.queue.enqueue(job))
         return jobs
 
@@ -271,6 +271,7 @@ class JobWorker:
             if profile.outro_reference
             else None
         )
+
         def asset_duration(path: Path | None) -> float:
             if path is None:
                 return 0
@@ -278,6 +279,7 @@ class JobWorker:
             if not result.valid:
                 raise ValueError("referenced asset could not be probed")
             return result.duration_seconds
+
         return job.model_copy(
             update={
                 "source_path": source,
@@ -477,7 +479,30 @@ class JobWorker:
             timeout = profile.timeout_seconds
             measured_loudness: dict[str, float] | None = None
             if profile.loudness.mode == "two_pass":
-                analysis = self.command_builder.build_segment_loudness_analysis(runtime_job)
+                composed_mix = temp_dir / f"composed.{profile.output.extension}"
+                composed_job = runtime_job.model_copy(
+                    update={"temporary_output_path": composed_mix}
+                )
+                composition_ok, composition_cancelled, composition_output = self._run_process(
+                    composed_job,
+                    self.command_builder.build(composed_job, include_final_loudness=False),
+                    timeout,
+                )
+                if composition_cancelled:
+                    finished = self._finish(job, JobState.CANCELLED, "cancelled")
+                    return JobRunResult(job=finished)
+                if not composition_ok:
+                    retry = job.attempt < job.max_attempts
+                    finished = self._finish(
+                        job,
+                        JobState.FAILED,
+                        composition_output[-1000:] or "composition failed",
+                        retry=retry,
+                    )
+                    return JobRunResult(job=finished, retry_scheduled=retry)
+                analysis = self.command_builder.build_final_loudness_analysis(
+                    runtime_job, composed_mix
+                )
                 analysis_ok, analysis_cancelled, analysis_output = self._run_process(
                     runtime_job, analysis, timeout
                 )
@@ -487,11 +512,16 @@ class JobWorker:
                 measured_loudness = self._parse_loudnorm(analysis_output)
                 if not analysis_ok or measured_loudness is None:
                     retry = job.attempt < job.max_attempts
-                    finished = self._finish(job, JobState.FAILED, "loudness analysis failed", retry=retry)
+                    finished = self._finish(
+                        job, JobState.FAILED, "final-mix loudness analysis failed", retry=retry
+                    )
                     return JobRunResult(job=finished, retry_scheduled=retry)
-            successful, cancelled, output = self._run_process(
-                runtime_job, self.command_builder.build(runtime_job, measured_loudness), timeout
-            )
+                encode_command = self.command_builder.build_final_normalization(
+                    runtime_job, composed_mix, measured_loudness
+                )
+            else:
+                encode_command = self.command_builder.build(runtime_job)
+            successful, cancelled, output = self._run_process(runtime_job, encode_command, timeout)
             parsed = self._parse_progress(output, job.duration_seconds)
             if parsed is None:
                 job = job.model_copy(

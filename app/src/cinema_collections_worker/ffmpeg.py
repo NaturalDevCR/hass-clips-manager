@@ -82,13 +82,32 @@ class FfmpegCommandBuilder:
             "-",
         ]
 
-    def build_final_loudness_analysis(self, job: JobRecord) -> list[str]:
+    def build_final_loudness_analysis(self, job: JobRecord, composed_mix: Path) -> list[str]:
         """Return a separate final-mix analysis argv when two-pass loudness is enabled."""
 
-        return self.build_segment_loudness_analysis(job)
+        profile = validate_profile(ProcessingProfile.model_validate(job.profile_settings))
+        loudnorm = self._loudnorm(profile)
+        if loudnorm is None:
+            return []
+        return [
+            self.executable,
+            "-hide_banner",
+            "-nostdin",
+            "-i",
+            str(composed_mix),
+            "-af",
+            loudnorm + ":print_format=json",
+            "-f",
+            "null",
+            "-",
+        ]
 
     def build(
-        self, job: JobRecord, measured_loudness: Mapping[str, float] | None = None
+        self,
+        job: JobRecord,
+        measured_loudness: Mapping[str, float] | None = None,
+        *,
+        include_final_loudness: bool = True,
     ) -> list[str]:
         profile = validate_profile(ProcessingProfile.model_validate(job.profile_settings))
         if job.source_path is None or job.temporary_output_path is None:
@@ -151,7 +170,11 @@ class FfmpegCommandBuilder:
         )
         loudnorm = self._loudnorm(profile, measured_loudness)
         final_audio = f"[{audio_label}]"
-        if loudnorm is not None and profile.loudness.final_mix_normalization:
+        if (
+            loudnorm is not None
+            and profile.loudness.final_mix_normalization
+            and include_final_loudness
+        ):
             final_audio += loudnorm + ","
         graph.append(final_audio + "anull[a_final]")
         command.extend(
@@ -185,3 +208,32 @@ class FfmpegCommandBuilder:
             command.extend(["-movflags", "+faststart"])
         command.append(str(job.temporary_output_path))
         return command
+
+    def build_final_normalization(
+        self, job: JobRecord, composed_mix: Path, measured_loudness: Mapping[str, float]
+    ) -> list[str]:
+        profile = validate_profile(ProcessingProfile.model_validate(job.profile_settings))
+        if job.temporary_output_path is None:
+            raise ValueError("job temporary output path is required")
+        loudnorm = self._loudnorm(profile, measured_loudness)
+        if loudnorm is None:
+            raise ValueError("final normalization requires two-pass loudness")
+        return [
+            self.executable,
+            "-hide_banner",
+            "-nostdin",
+            "-y",
+            "-progress",
+            "pipe:1",
+            "-i",
+            str(composed_mix),
+            "-af",
+            loudnorm,
+            "-c:v",
+            "copy",
+            "-c:a",
+            profile.audio.codec,
+            "-b:a",
+            f"{profile.audio.bitrate_kbps}k",
+            str(job.temporary_output_path),
+        ]
