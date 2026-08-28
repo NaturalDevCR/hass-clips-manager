@@ -106,3 +106,28 @@ git diff --check
 Self-review confirms both package roots now exist and Pyright checks those
 concrete directories. The worker workflow still intentionally depends on the
 Dockerfile supplied by the worker implementation task.
+
+## Round 2 review fix
+
+Status: DONE
+
+Updated `.github/workflows/quality.yml` so formatting, linting, typing, and
+tests all run through `uv run` after `uv sync --all-groups`; this guarantees the
+workflow resolves the tools from the managed environment rather than requiring
+global executables.
+
+Verification:
+
+```text
+uv run --group dev pytest tests/test_repository_metadata.py -v
+3 passed in 0.00s
+
+uv run --group dev ruff check .
+All checks passed!
+
+uv run --group dev ruff format --check .
+7 files already formatted
+
+uv run --group dev pyright
+0 errors, 0 warnings, 0 informations
+```
