@@ -357,13 +357,6 @@ def async_update_collection_subentry(
     )
 
 
-def _positive(value: object) -> object:
-    """Reject zero and negative numbers to mirror strict Worker bounds."""
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
-        raise vol.Invalid("value must be greater than zero")
-    return value
-
-
 _INT_GT_0 = vol.All(vol.Coerce(int), vol.Range(min=1))
 _INT_1_16384 = vol.All(vol.Coerce(int), vol.Range(min=1, max=16384))
 _INT_1_240 = vol.All(vol.Coerce(int), vol.Range(min=1, max=240))
@@ -373,10 +366,16 @@ _FLOAT_M70_M5 = vol.All(vol.Coerce(float), vol.Range(min=-70, max=-5))
 _FLOAT_M20_0 = vol.All(vol.Coerce(float), vol.Range(min=-20, max=0))
 _FLOAT_1_50 = vol.All(vol.Coerce(float), vol.Range(min=1, max=50))
 _FLOAT_0_60 = vol.All(vol.Coerce(float), vol.Range(min=0, max=60))
-_FLOAT_GT_0_LE_60 = vol.All(vol.Coerce(float), vol.Range(max=60), _positive)
-_FLOAT_GT_0 = vol.All(vol.Coerce(float), _positive)
-_OPTIONAL_POSITIVE_INT = vol.Any(_INT_GT_0, "")
-_OPTIONAL_POSITIVE_FLOAT = vol.Any(_FLOAT_GT_0, "")
+_FLOAT_GT_0_LE_60 = vol.All(vol.Coerce(float), vol.Range(min=0, max=60, min_included=False))
+# HA's schema-to-frontend-form serializer (voluptuous_serialize) only
+# recognizes vol.Any(None, X) as its "optional/nullable" idiom; a
+# vol.Any(<validator>, "") ("value or blank") pattern falls through every
+# branch and raises "Unable to convert schema", which the config-entries
+# HTTP endpoint surfaces as a bare 500 rather than a flow error. These two
+# fields therefore stay plain `str`; blank-vs-numeric parsing (and the
+# positivity check) happens in _profile_settings_from_flow_input instead,
+# whose broad `except (KeyError, TypeError, ValueError)` already turns a
+# bad value into a normal "invalid_profile" form error.
 
 
 def _choice_selector(choices: Sequence[tuple[str, str]]) -> Any:
@@ -441,7 +440,7 @@ def _profile_form_values(settings: Mapping[str, object]) -> dict[str, object]:
         "video_preset": video.get("preset", "fast"),
         "video_quality_mode": quality.get("mode", "crf"),
         "video_crf": quality.get("crf", 23.0),
-        "video_bitrate_kbps": quality.get("bitrate_kbps", ""),
+        "video_bitrate_kbps": str(quality.get("bitrate_kbps", "") or ""),
         "video_h264_profile": video.get("h264_profile", "high"),
         "video_level": video.get("level", "5.1"),
         "video_pixel_format": video.get("pixel_format", "yuv420p"),
@@ -471,7 +470,9 @@ def _profile_form_values(settings: Mapping[str, object]) -> dict[str, object]:
         "intro_reference": settings.get("intro_reference") or "",
         "outro_reference": settings.get("outro_reference") or "",
         "timeout_seconds": settings.get("timeout_seconds", 300),
-        "minimum_segment_duration_seconds": settings.get("minimum_segment_duration_seconds") or "",
+        "minimum_segment_duration_seconds": str(
+            settings.get("minimum_segment_duration_seconds") or ""
+        ),
     }
 
 
@@ -726,9 +727,7 @@ def _profile_schema(existing: ProfileSubentryData | None) -> vol.Schema:
                 "video_quality_mode", default=form["video_quality_mode"]
             ): _choice_selector([("crf", "CRF"), ("bitrate", "Bitrate")]),
             vol.Required("video_crf", default=form["video_crf"]): _FLOAT_0_51,
-            vol.Optional(
-                "video_bitrate_kbps", default=form["video_bitrate_kbps"]
-            ): _OPTIONAL_POSITIVE_INT,
+            vol.Optional("video_bitrate_kbps", default=form["video_bitrate_kbps"]): str,
             vol.Required("video_h264_profile", default=form["video_h264_profile"]): str,
             vol.Required("video_level", default=form["video_level"]): str,
             vol.Required("video_pixel_format", default=form["video_pixel_format"]): str,
@@ -783,7 +782,7 @@ def _profile_schema(existing: ProfileSubentryData | None) -> vol.Schema:
             vol.Optional(
                 "minimum_segment_duration_seconds",
                 default=form["minimum_segment_duration_seconds"],
-            ): _OPTIONAL_POSITIVE_FLOAT,
+            ): str,
         }
     )
 

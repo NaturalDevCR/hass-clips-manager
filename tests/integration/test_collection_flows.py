@@ -17,6 +17,7 @@ from custom_components.cinema_collections.const import (
 from custom_components.cinema_collections.subentries import (
     CollectionSubentryData,
     WorkerValidationError,
+    _collection_schema,
     async_sync_collection,
 )
 
@@ -408,3 +409,35 @@ async def test_profile_subentry_flow_reconfigures_with_optimistic_revision(
 
     assert result["type"] == "abort"
     assert entry.subentries[subentry.subentry_id].data["name"] == "Cinema 4K"
+
+
+def test_collection_schema_is_serializable_for_the_frontend() -> None:
+    """voluptuous_serialize converts every field type this schema can carry.
+
+    The real HTTP config-entries endpoint serializes the flow's data_schema
+    with voluptuous_serialize before a submission-based test would ever
+    exercise it; a construct it can't convert surfaces as a bare 500 in a
+    real Home Assistant instance instead of a caught flow error.
+    """
+    import voluptuous_serialize
+    from homeassistant.helpers import config_validation as cv
+
+    from custom_components.cinema_collections.models import WorkerProfileSummary
+
+    for profiles in ((), (WorkerProfileSummary(id="4k", name="4K"),)):
+        for existing in (
+            None,
+            CollectionSubentryData(
+                collection_id="films",
+                name="Films",
+                source_directory="films",
+                processing_profile_id="4k",
+            ),
+        ):
+            fields = voluptuous_serialize.convert(
+                _collection_schema(existing, profiles), custom_serializer=cv.custom_serializer
+            )
+            assert {field["name"] for field in fields} >= {
+                "processing_profile_id",
+                "schedule_strategy",
+            }

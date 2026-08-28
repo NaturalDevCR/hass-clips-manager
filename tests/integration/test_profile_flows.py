@@ -13,6 +13,7 @@ from custom_components.cinema_collections.const import (
     DOMAIN,
     SUBENTRY_PROFILE,
 )
+from custom_components.cinema_collections.subentries import ProfileSubentryData
 
 
 def profile_form(**overrides: object) -> dict[str, object]:
@@ -366,3 +367,27 @@ async def test_profile_flow_optional_reference_values_are_preserved(
     assert settings["intro_reference"] == "intros/intro.mp4"
     assert settings["outro_reference"] == "outros/outro.mp4"
     assert settings["minimum_segment_duration_seconds"] == 5.0
+
+
+def test_profile_schema_is_serializable_for_the_frontend() -> None:
+    """The real HTTP layer serializes every flow schema with voluptuous_serialize
+    before it ever reaches Python-level form-submission tests. A validator
+    construct that reaches Python fine but that serializer can't convert (e.g.
+    vol.Any(<validator>, "") — it only recognizes vol.Any(None, X) as
+    "optional") surfaces as a bare 500 in a real Home Assistant instance, not
+    as a caught flow error; none of the submission-based tests above exercise
+    this layer at all.
+    """
+    import voluptuous_serialize
+    from homeassistant.helpers import config_validation as cv
+
+    from custom_components.cinema_collections.subentries import _profile_schema
+
+    for existing in (None, ProfileSubentryData(profile_id="4k", name="4K", settings={})):
+        fields = voluptuous_serialize.convert(
+            _profile_schema(existing), custom_serializer=cv.custom_serializer
+        )
+        assert {field["name"] for field in fields} >= {
+            "video_bitrate_kbps",
+            "minimum_segment_duration_seconds",
+        }
