@@ -1,0 +1,44 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cinema-collections"
+version = "0.1.0"
+description = "Home Assistant Cinema Collections app and integration"
+readme = "README.md"
+requires-python = ">=3.13"
+license = { file = "LICENSE" }
+authors = [{ name = "Cinema Collections Contributors" }]
+dependencies = []
+
+[tool.hatch.build.targets.wheel]
+packages = ["cinema_collections_worker"]
+
+[dependency-groups]
+dev = ["pytest>=8.3", "pytest-asyncio>=0.24", "ruff>=0.8", "pyright>=1.1.390"]
+worker = ["fastapi>=0.115", "uvicorn[standard]>=0.32"]
+home-assistant = ["homeassistant>=2024.1"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+  "worker: tests for the Cinema Collections worker",
+  "integration: tests for the Home Assistant integration",
+]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+extend-exclude = [".venv", "build", "dist"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.pyright]
+include = ["cinema_collections_worker", "custom_components/cinema_collections"]
+typeCheckingMode = "strict"
+pythonVersion = "3.13"
+venvPath = "."
+venv = ".venv"
+
