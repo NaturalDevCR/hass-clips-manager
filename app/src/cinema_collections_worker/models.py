@@ -11,6 +11,17 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .paths import validate_collection_id
 
+# Persistence request/response models live in ``domain``; re-export them here
+# so older Worker imports continue to work while the API evolves.
+from .domain import (  # noqa: E402
+    CollectionCreate,
+    CollectionPatch,
+    CollectionRecord,
+    ProfileCreate,
+    ProfilePatch,
+    ProfileRecord,
+)
+
 
 class ClipState(StrEnum):
     DISCOVERED = "discovered"
