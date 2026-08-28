@@ -1,0 +1,41 @@
+select_next_clip:
+  name: Select next clip
+  description: Select the next ready compiled clip without controlling playback.
+  fields:
+    entry_id:
+      selector:
+        text:
+    collection_id:
+      selector:
+        text:
+    dry_run:
+      selector:
+        boolean:
+  response:
+    optional: false
+    content:
+      media_content_id:
+        description: Media Source URI for the selected clip.
+      media_content_type:
+        description: Media content type, always video.
+reset_history:
+  name: Reset playback history
+  description: Reset no-repeat history globally or for one collection.
+scan_library:
+  name: Scan library
+  description: Ask the Worker to scan configured source collections.
+compile_collection:
+  name: Compile collection
+  description: Ask the Worker to compile one configured collection.
+compile_all:
+  name: Compile all collections
+  description: Ask the Worker to compile every enabled configured collection.
+retry_failed:
+  name: Retry failed compilation
+  description: Re-request stale compilation work for configured collections.
+cancel_processing:
+  name: Cancel processing
+  description: Cooperatively cancel the active Worker job without deleting output.
+set_collection_override:
+  name: Set collection override
+  description: Set automatic, default, or explicit collection selection policy.

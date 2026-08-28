@@ -213,6 +213,16 @@ class WorkerApiClient:
             "POST", "/scan", {"collection_ids": collection_ids}, idempotency_key
         )
 
+    async def async_cancel_job(self, job_id: str, *, idempotency_key: str) -> Mapping[str, Any]:
+        """Request cooperative cancellation of one known Worker job."""
+        if not job_id:
+            raise ValueError("Worker cancellation requires a job ID")
+        return await self._async_mutate("POST", f"/jobs/{job_id}/cancel", {}, idempotency_key)
+
+    async def async_cleanup_temporaries(self, *, idempotency_key: str) -> Mapping[str, Any]:
+        """Request Worker-tracked temporary cleanup without touching local storage."""
+        return await self._async_mutate("POST", "/cleanup-temporaries", {}, idempotency_key)
+
     async def _async_get(self, path: str) -> Mapping[str, Any]:
         """Request an idempotent GET endpoint with bounded retries and safe errors."""
         for attempt in range(MAX_REQUEST_ATTEMPTS):

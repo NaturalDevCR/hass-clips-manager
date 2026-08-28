@@ -20,4 +20,4 @@ MAX_REQUEST_ATTEMPTS = 3
 RETRY_BACKOFF_SECONDS = 0.1
 EXPECTED_WORKER_COMPONENT = "cinema-collections-worker"
 
-PLATFORMS: tuple[str, ...] = ()
+PLATFORMS: tuple[str, ...] = ("sensor", "button", "select")
