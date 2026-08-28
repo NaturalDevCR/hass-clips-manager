@@ -124,6 +124,38 @@ def test_scan_compile_and_cancellation_are_accepted_as_jobs(tmp_path: Path) -> N
     assert cancelled.json()["state"] == "cancelled"
 
 
+def test_compile_api_rejects_undocumented_fields_and_strategies(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    _create_profile_and_collection(client)
+
+    max_attempts = client.post(
+        "/api/v1/compile",
+        headers=_headers("max-attempts"),
+        json={"collection_id": "films", "max_attempts": 9},
+    )
+    strategy = client.post(
+        "/api/v1/compile",
+        headers=_headers("bad-strategy"),
+        json={"collection_id": "films", "strategy": "anything"},
+    )
+
+    assert max_attempts.status_code == 422
+    assert max_attempts.json()["code"] == "validation_error"
+    assert any(error["type"] == "extra_forbidden" for error in max_attempts.json()["details"])
+    assert strategy.status_code == 422
+    assert strategy.json()["code"] == "validation_error"
+    assert any(error["type"] == "literal_error" for error in strategy.json()["details"])
+
+
+def test_list_endpoints_reject_out_of_contract_pagination(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+
+    for path in ("collections", "profiles", "clips", "jobs", "logs"):
+        response = client.get(f"/api/v1/{path}?page=0&page_size=101", headers=_headers())
+        assert response.status_code == 422
+        assert response.json()["code"] == "validation_error"
+
+
 def test_clip_output_availability_and_paginated_lookups(tmp_path: Path) -> None:
     client = _client(tmp_path)
     _create_profile_and_collection(client)

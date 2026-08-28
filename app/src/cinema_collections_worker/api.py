@@ -13,8 +13,9 @@ from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any, Literal, cast
+from uuid import UUID
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
@@ -30,7 +31,8 @@ from .domain import (
     ProfilePatch,
     ProfileRecord,
 )
-from .jobs import CompileRequest, JobProgress, JobRecord, JobService, JobStage
+from .jobs import CompileRequest as InternalCompileRequest
+from .jobs import JobProgress, JobRecord, JobService, JobStage
 from .models import ClipRecord
 from .paths import SafePathResolver
 from .queue import PersistentJobQueue
@@ -48,6 +50,7 @@ API_VERSION = "1.0.0"
 MIN_CLIENT_VERSION = "1.0.0"
 MAX_CLIENT_VERSION = "1.x"
 _ACTOR = "worker-api"
+_CONTRACT_PATH = Path(__file__).parents[3] / "contract" / "openapi-v1.yaml"
 
 
 class ErrorPayload(BaseModel):
@@ -93,6 +96,27 @@ class ScanRequest(BaseModel):
     resume: bool = True
 
 
+class CompileRequest(BaseModel):
+    """Public compile body: deliberately narrower than the internal job request."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    collection_id: str
+    clip_ids: list[UUID] | None = None
+    strategy: Literal["scan_and_compile_changed_or_missing", "compile_stale_only", "scan_only"] = (
+        "scan_and_compile_changed_or_missing"
+    )
+    skip_if_processing: bool = True
+
+    def to_internal(self) -> InternalCompileRequest:
+        return InternalCompileRequest(
+            collection_id=self.collection_id,
+            clip_ids=[str(clip_id) for clip_id in self.clip_ids] if self.clip_ids else None,
+            strategy=self.strategy,
+            skip_if_processing=self.skip_if_processing,
+        )
+
+
 class ApiJob(BaseModel):
     id: str
     kind: Literal["scan", "compile", "cleanup"]
@@ -105,6 +129,8 @@ class ApiJob(BaseModel):
 
 Auth = Annotated[None, Depends(require_bearer_token)]
 IdempotencyKey = Annotated[str, Depends(require_idempotency_key)]
+PageNumber = Annotated[int, Query(ge=1)]
+PageSize = Annotated[int, Query(ge=1, le=100)]
 
 
 def _request_id(request: Request) -> str:
@@ -255,7 +281,9 @@ def _replay_or_remember_job(
     return job
 
 
-def _queued_system_job(kind: Literal["scan", "cleanup"]) -> JobRecord:
+def _queued_system_job(
+    kind: Literal["scan", "cleanup"], payload: dict[str, Any] | None = None
+) -> JobRecord:
     """Represent accepted maintenance work without starting it in an HTTP request."""
 
     job_id = str(uuid.uuid4())
@@ -268,7 +296,7 @@ def _queued_system_job(kind: Literal["scan", "cleanup"]) -> JobRecord:
         output_relative_path=f"{kind}/{job_id}.result",
         source_fingerprint="api-request",
         profile_fingerprint="api-request",
-        profile_settings={},
+        profile_settings=payload or {},
         duration_seconds=0,
         progress=JobProgress(stage=JobStage.QUEUED, percent=0, eta_seconds=None),
     )
@@ -297,6 +325,15 @@ def create_app(settings: WorkerSettings) -> FastAPI:
     app.state.jobs = JobService(
         database, resolver, disk_reserve_bytes=settings.disk_reserve_bytes, queue=queue
     )
+
+    def contract_openapi() -> dict[str, Any]:
+        """Expose the versioned, reviewed contract rather than inferred internals."""
+
+        if app.openapi_schema is None:
+            app.openapi_schema = json.loads(_CONTRACT_PATH.read_text(encoding="utf-8"))
+        return cast(dict[str, Any], app.openapi_schema)
+
+    app.openapi = contract_openapi  # type: ignore[method-assign]
 
     @app.middleware("http")
     async def assign_request_id(request: Request, call_next: Callable[[Request], Any]) -> Response:
@@ -378,7 +415,7 @@ def create_app(settings: WorkerSettings) -> FastAPI:
     @app.get(
         "/api/v1/collections", response_model=Page, dependencies=[Depends(require_bearer_token)]
     )
-    def list_collections(page: int = 1, page_size: int = 25) -> Page:
+    def list_collections(page: PageNumber = 1, page_size: PageSize = 25) -> Page:
         rows = database.connection.execute("SELECT id FROM collections ORDER BY id").fetchall()
         return _page(
             [collections.get(row["id"]).model_dump(mode="json") for row in rows], page, page_size
@@ -409,7 +446,7 @@ def create_app(settings: WorkerSettings) -> FastAPI:
         return collections.patch(collection_id, revision, payload, actor=_ACTOR, request_id=key)
 
     @app.get("/api/v1/profiles", response_model=Page, dependencies=[Depends(require_bearer_token)])
-    def list_profiles(page: int = 1, page_size: int = 25) -> Page:
+    def list_profiles(page: PageNumber = 1, page_size: PageSize = 25) -> Page:
         rows = database.connection.execute("SELECT id FROM profiles ORDER BY id").fetchall()
         return _page(
             [profiles.get(row["id"]).model_dump(mode="json") for row in rows], page, page_size
@@ -440,7 +477,7 @@ def create_app(settings: WorkerSettings) -> FastAPI:
         return profiles.patch(profile_id, revision, payload, actor=_ACTOR, request_id=key)
 
     @app.get("/api/v1/clips", response_model=Page, dependencies=[Depends(require_bearer_token)])
-    def list_clips(page: int = 1, page_size: int = 25) -> Page:
+    def list_clips(page: PageNumber = 1, page_size: PageSize = 25) -> Page:
         rows = database.connection.execute(
             "SELECT * FROM clips WHERE state <> 'deleted' ORDER BY id"
         ).fetchall()
@@ -472,7 +509,7 @@ def create_app(settings: WorkerSettings) -> FastAPI:
             key=key,
             operation="scan.start",
             payload=body,
-            create=lambda: queue.enqueue(_queued_system_job("scan")),
+            create=lambda: queue.enqueue(_queued_system_job("scan", body)),
         )
         return _serialize_job(job, request)
 
@@ -484,9 +521,10 @@ def create_app(settings: WorkerSettings) -> FastAPI:
     )
     def start_compile(request: Request, payload: CompileRequest, key: IdempotencyKey) -> ApiJob:
         body = payload.model_dump(mode="json")
+        internal_request = payload.to_internal()
 
         def enqueue() -> JobRecord:
-            jobs = app.state.jobs.enqueue_compile(payload)
+            jobs = app.state.jobs.enqueue_compile(internal_request)
             if not jobs:
                 raise ValueError("no eligible clips are available for compilation")
             return jobs[0]
@@ -497,7 +535,7 @@ def create_app(settings: WorkerSettings) -> FastAPI:
         return _serialize_job(job, request)
 
     @app.get("/api/v1/jobs", response_model=Page, dependencies=[Depends(require_bearer_token)])
-    def list_jobs(request: Request, page: int = 1, page_size: int = 25) -> Page:
+    def list_jobs(request: Request, page: PageNumber = 1, page_size: PageSize = 25) -> Page:
         rows = database.connection.execute(
             "SELECT id FROM jobs ORDER BY created_at DESC, id DESC"
         ).fetchall()
@@ -528,7 +566,7 @@ def create_app(settings: WorkerSettings) -> FastAPI:
         return _serialize_job(job, request)
 
     @app.get("/api/v1/logs", response_model=Page, dependencies=[Depends(require_bearer_token)])
-    def list_logs(page: int = 1, page_size: int = 25) -> Page:
+    def list_logs(page: PageNumber = 1, page_size: PageSize = 25) -> Page:
         return _page([], page, page_size)
 
     @app.post(

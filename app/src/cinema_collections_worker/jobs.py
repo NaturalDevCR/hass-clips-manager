@@ -15,10 +15,11 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from .catalog import CatalogService
 from .database import Database
 from .ffmpeg import FfmpegCommandBuilder
 from .paths import RootKey, SafePathResolver, validate_collection_id, validate_relative_path
@@ -245,6 +246,7 @@ class JobWorker:
         probe_client: _Probe | None = None,
         process_factory: Callable[..., Any] = subprocess.Popen,
         queue: PersistentJobQueue | None = None,
+        catalog: CatalogService | None = None,
     ) -> None:
         self.db = db
         self.resolver = resolver
@@ -252,6 +254,7 @@ class JobWorker:
         self.probe_client = probe_client or ProbeClient()
         self.process_factory = process_factory
         self.queue = queue or PersistentJobQueue(db)
+        self.catalog = catalog or CatalogService(db, resolver)
 
     def claim_next(self) -> JobRecord | None:
         return self.queue.claim_next()
@@ -467,10 +470,75 @@ class JobWorker:
             )
         )
 
+    def _run_scan_job(self, job: JobRecord) -> JobRunResult:
+        """Run catalog discovery for a queued maintenance request."""
+
+        try:
+            raw_ids: object = job.profile_settings.get("collection_ids")
+            collection_ids: set[str] | None = None
+            if raw_ids is not None:
+                if not isinstance(raw_ids, list):
+                    raise ValueError("scan request has invalid collection IDs")
+                collection_ids = set()
+                for value in cast(list[object], raw_ids):
+                    if not isinstance(value, str):
+                        raise ValueError("scan request has invalid collection IDs")
+                    collection_ids.add(value)
+            summary = self.catalog.scan(collection_ids)
+            completed = job.model_copy(
+                update={
+                    "logs": (
+                        job.logs
+                        + [
+                            "scan complete "
+                            f"added={summary.added} modified={summary.modified} "
+                            f"deleted={summary.deleted} invalid={summary.invalid}"
+                        ]
+                    )[-100:]
+                }
+            )
+            return JobRunResult(job=self._finish(completed, JobState.SUCCEEDED))
+        except Exception as exc:
+            return JobRunResult(job=self._finish(job, JobState.FAILED, str(exc)[:1000]))
+
+    def _cleanup_worker_temporaries(self) -> int:
+        """Remove only direct UUID-named directories under the configured temp root."""
+
+        root = self.resolver.roots[RootKey.TEMP]
+        removed = 0
+        for candidate in root.iterdir():
+            try:
+                uuid.UUID(candidate.name)
+            except ValueError:
+                continue
+            if not candidate.is_dir():
+                continue
+            self._cleanup(candidate)
+            removed += 1
+        return removed
+
+    def _run_cleanup_job(self, job: JobRecord) -> JobRunResult:
+        try:
+            removed = self._cleanup_worker_temporaries()
+            completed = job.model_copy(
+                update={"logs": (job.logs + [f"temporary cleanup removed={removed}"])[-100:]}
+            )
+            return JobRunResult(job=self._finish(completed, JobState.SUCCEEDED))
+        except Exception as exc:
+            return JobRunResult(job=self._finish(job, JobState.FAILED, str(exc)[:1000]))
+
     def run_once(self) -> JobRunResult | None:
         job = self.claim_next()
         if job is None:
             return None
+        if job.kind == "scan":
+            return self._run_scan_job(job)
+        if job.kind == "cleanup":
+            return self._run_cleanup_job(job)
+        if job.kind != "compile":
+            return JobRunResult(
+                job=self._finish(job, JobState.FAILED, f"unsupported job kind: {job.kind}")
+            )
         temp_dir = self._temporary_directory(job.id)
         try:
             temp_dir.mkdir(parents=True, exist_ok=False)
@@ -530,7 +598,9 @@ class JobWorker:
             else:
                 encode_command = self.command_builder.build(runtime_job)
             if encode_command is not None:
-                successful, cancelled, output = self._run_process(runtime_job, encode_command, timeout)
+                successful, cancelled, output = self._run_process(
+                    runtime_job, encode_command, timeout
+                )
             parsed = self._parse_progress(output, job.duration_seconds)
             if parsed is None:
                 job = job.model_copy(

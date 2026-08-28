@@ -1,8 +1,10 @@
 # ruff: noqa: E501
 import signal
+import uuid
 
 import pytest
-from cinema_collections_worker.jobs import CompileRequest, JobState, JobWorker
+from cinema_collections_worker.catalog import ScanSummary
+from cinema_collections_worker.jobs import CompileRequest, JobRecord, JobState, JobWorker
 from cinema_collections_worker.probe import MediaProbeResult
 from test_queue import _configured_service
 
@@ -26,6 +28,31 @@ class _ValidProbe:
 class _NeverFinishesProcess:
     pid = 5151
     returncode = None
+
+
+class _RecordingCatalog:
+    def __init__(self) -> None:
+        self.requests: list[set[str] | None] = []
+
+    def scan(self, collection_ids: set[str] | None = None) -> ScanSummary:
+        self.requests.append(collection_ids)
+        return ScanSummary(added=2, modified=1)
+
+
+def _maintenance_job(kind: str, *, collection_ids: list[str] | None = None) -> JobRecord:
+    job_id = str(uuid.uuid4())
+    return JobRecord(
+        id=job_id,
+        kind=kind,
+        collection_id="system",
+        clip_id=job_id,
+        source_relative_path=f"{kind}/{job_id}.request",
+        output_relative_path=f"{kind}/{job_id}.result",
+        source_fingerprint="request",
+        profile_fingerprint="request",
+        profile_settings={"collection_ids": collection_ids} if collection_ids else {},
+        duration_seconds=0,
+    )
 
 
 def test_cancelling_running_job_terminates_process_group_and_removes_temp(tmp_path, monkeypatch):
@@ -87,3 +114,48 @@ def test_cleanup_rejects_non_uuid_or_out_of_root_temporary_directory(tmp_path):
         worker._cleanup(resolver.roots["temp"] / "../outside")
 
     assert outside.exists()
+
+
+def test_scan_job_dispatches_catalog_scan_without_entering_compile_execution(tmp_path) -> None:
+    db, resolver, _service = _configured_service(tmp_path)
+    catalog = _RecordingCatalog()
+    job = _maintenance_job("scan", collection_ids=["films"])
+    from cinema_collections_worker.queue import PersistentJobQueue
+
+    PersistentJobQueue(db).enqueue(job)
+    worker = JobWorker(
+        db,
+        resolver,
+        catalog=catalog,
+        process_factory=lambda *_args, **_kwargs: pytest.fail("scan must not run FFmpeg"),
+    )
+
+    result = worker.run_once()
+
+    assert result is not None and result.job.state is JobState.SUCCEEDED
+    assert catalog.requests == [{"films"}]
+    assert "added=2" in result.job.logs[-1]
+
+
+def test_cleanup_job_removes_only_uuid_temp_directories_without_compile_execution(tmp_path) -> None:
+    db, resolver, _service = _configured_service(tmp_path)
+    stale = resolver.roots["temp"] / str(uuid.uuid4())
+    stale.mkdir()
+    (stale / "partial.mp4").write_bytes(b"partial")
+    preserved = resolver.roots["temp"] / "not-a-job"
+    preserved.mkdir()
+    job = _maintenance_job("cleanup")
+    from cinema_collections_worker.queue import PersistentJobQueue
+
+    PersistentJobQueue(db).enqueue(job)
+    worker = JobWorker(
+        db,
+        resolver,
+        process_factory=lambda *_args, **_kwargs: pytest.fail("cleanup must not run FFmpeg"),
+    )
+
+    result = worker.run_once()
+
+    assert result is not None and result.job.state is JobState.SUCCEEDED
+    assert not stale.exists()
+    assert preserved.exists()
