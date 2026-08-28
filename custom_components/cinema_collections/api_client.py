@@ -10,7 +10,14 @@ from urllib.parse import urlsplit, urlunsplit
 from aiohttp import ClientError, ClientSession, ClientTimeout
 
 from .const import API_PREFIX, DEFAULT_REQUEST_TIMEOUT, MAX_REQUEST_ATTEMPTS, RETRY_BACKOFF_SECONDS
-from .models import WorkerClip, WorkerContractError, WorkerHealth, WorkerJob, WorkerStatus
+from .models import (
+    WorkerClip,
+    WorkerContractError,
+    WorkerHealth,
+    WorkerJob,
+    WorkerProfileSummary,
+    WorkerStatus,
+)
 
 
 class WorkerApiError(RuntimeError):
@@ -133,6 +140,41 @@ class WorkerApiClient:
             if not items:
                 raise WorkerApiProtocolError(
                     "Worker clips response ended before its declared total"
+                )
+            page += 1
+
+    async def async_list_profiles(self) -> tuple[WorkerProfileSummary, ...]:
+        """Return every Worker processing profile's stable ID and display name."""
+        page = 1
+        profiles: list[WorkerProfileSummary] = []
+        while True:
+            payload = await self._async_get(f"/profiles?page={page}&page_size=100")
+            try:
+                total = payload.get("total")
+                raw_items = payload.get("items")
+                if isinstance(total, bool) or not isinstance(total, int) or total < 0:
+                    raise WorkerContractError(
+                        "Worker profiles response field 'total' must be an integer"
+                    )
+                if not isinstance(raw_items, list):
+                    raise WorkerContractError(
+                        "Worker profiles response field 'items' must be an array"
+                    )
+                items = cast(list[object], raw_items)
+                if not all(isinstance(item, Mapping) for item in items):
+                    raise WorkerContractError("Worker profiles response items must be objects")
+                profiles.extend(
+                    WorkerProfileSummary.from_dict(cast(Mapping[str, Any], item)) for item in items
+                )
+            except WorkerContractError as error:
+                raise WorkerApiProtocolError(
+                    "Worker profiles response did not match the API contract"
+                ) from error
+            if len(profiles) >= total:
+                return tuple(profiles[:total])
+            if not items:
+                raise WorkerApiProtocolError(
+                    "Worker profiles response ended before its declared total"
                 )
             page += 1
 

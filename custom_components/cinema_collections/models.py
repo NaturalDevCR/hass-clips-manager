@@ -68,6 +68,19 @@ class WorkerClip:
 
 
 @dataclass(frozen=True, slots=True)
+class WorkerProfileSummary:
+    """The minimal Worker processing-profile identity needed for a picker."""
+
+    id: str
+    name: str
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> WorkerProfileSummary:
+        """Parse the public subset of a Worker profile used to populate a selector."""
+        return cls(id=_required_string(payload, "id"), name=_required_string(payload, "name"))
+
+
+@dataclass(frozen=True, slots=True)
 class WorkerJob:
     """The safe public job progress fields exposed by the Worker queue."""
 

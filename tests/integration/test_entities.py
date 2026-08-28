@@ -6,11 +6,14 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
+from homeassistant.util import dt as dt_util
 
 from custom_components.cinema_collections.api_client import WorkerApiConnectionError
 from custom_components.cinema_collections.coordinator import CinemaCollectionsCoordinator
+from custom_components.cinema_collections.history import PlaybackHistoryStore
 from custom_components.cinema_collections.models import WorkerHealth, WorkerStatus
 from custom_components.cinema_collections.resolver import CollectionPolicy, OverrideMode
+from custom_components.cinema_collections.sensor import SENSOR_DESCRIPTIONS, CinemaCollectionsSensor
 
 
 class Worker:
@@ -196,3 +199,89 @@ async def test_platform_setup_with_home_assistant_assigns_stable_unique_ids(hass
         f"{entry.entry_id}_{description.key}"
         for description in (*sensor.SENSOR_DESCRIPTIONS, *button.BUTTON_DESCRIPTIONS)
     } | {f"{entry.entry_id}_{select.SELECT_DESCRIPTION.key}"}
+
+
+class Clock:
+    """A fixed timezone-aware clock for playback-history tests."""
+
+    def now(self) -> datetime:
+        return datetime(2026, 8, 27, 20, tzinfo=UTC)
+
+
+def choose_first(values: tuple[str, ...]) -> str:
+    """Make selection order observable without duplicating selection logic."""
+    return values[0]
+
+
+async def make_history(hass, key: str) -> PlaybackHistoryStore:
+    history = PlaybackHistoryStore(
+        hass,  # type: ignore[arg-type]
+        storage_key=key,
+        now=Clock().now,
+        chooser=choose_first,
+    )
+    await history.async_setup()
+    return history
+
+
+def make_coordinator(hass, history: PlaybackHistoryStore | None) -> CinemaCollectionsCoordinator:
+    return CinemaCollectionsCoordinator(
+        hass,
+        Worker(),
+        collections=lambda: (CollectionPolicy("films", is_default=True),),
+        override=lambda: OverrideMode.automatic(),
+        history=lambda: history,
+        now=lambda: datetime(2026, 8, 27, tzinfo=UTC),
+    )
+
+
+def make_active_collection_sensor(
+    coordinator: CinemaCollectionsCoordinator,
+) -> CinemaCollectionsSensor:
+    description = next(item for item in SENSOR_DESCRIPTIONS if item.key == "active_collection")
+    return CinemaCollectionsSensor(coordinator, description, "history-entry")
+
+
+@pytest.mark.asyncio
+async def test_active_collection_sensor_exposes_playback_history_summary(hass) -> None:
+    """Selections advance the history attribute without leaking clip ID lists."""
+    history = await make_history(hass, "entity-history")
+    await history.async_select("films", ("clip-a", "clip-b"), dry_run=False)
+    await history.async_reset("films")
+    await history.async_select("films", ("clip-a", "clip-b"), dry_run=False)
+
+    coordinator = make_coordinator(hass, history)
+    await coordinator.async_refresh()
+    sensor = make_active_collection_sensor(coordinator)
+
+    assert coordinator.data.history["films"] == {
+        "round_number": 2,
+        "played_count": 1,
+        "last_selected_clip_id": "clip-a",
+        "last_reset_at": dt_util.as_local(datetime(2026, 8, 27, 20, tzinfo=UTC)).isoformat(),
+    }
+    assert sensor.extra_state_attributes["history"] == dict(coordinator.data.history)
+
+
+@pytest.mark.asyncio
+async def test_active_collection_sensor_history_omits_unplayed_collections(hass) -> None:
+    """A collection with no history yet has no entry, matching the store's view."""
+    history = await make_history(hass, "entity-history-unplayed")
+    await history.async_select("films", ("clip-a",), dry_run=False)
+
+    coordinator = make_coordinator(hass, history)
+    await coordinator.async_refresh()
+
+    assert coordinator.data.history["films"]["played_count"] == 1
+    assert "trailers" not in coordinator.data.history
+
+
+@pytest.mark.asyncio
+async def test_active_collection_sensor_history_is_empty_when_store_is_unset(hass) -> None:
+    """A runtime without a history store exposes an empty dict, never an error."""
+    coordinator = make_coordinator(hass, None)
+    await coordinator.async_refresh()
+    sensor = make_active_collection_sensor(coordinator)
+
+    assert coordinator.data.history == {}
+    assert sensor.extra_state_attributes["history"] == {}

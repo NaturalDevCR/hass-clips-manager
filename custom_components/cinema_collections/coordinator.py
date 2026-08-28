@@ -8,7 +8,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from types import MappingProxyType
-from typing import Protocol, cast
+from typing import Any, Protocol, cast
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -17,6 +17,7 @@ from homeassistant.util import dt as dt_util
 
 from .api_client import WorkerApiError
 from .const import CONF_OVERRIDE_COLLECTION_ID, CONF_OVERRIDE_MODE, DOMAIN
+from .history import PlaybackHistoryStore
 from .models import WorkerClip, WorkerHealth, WorkerStatus
 from .resolver import (
     CollectionPolicy,
@@ -62,6 +63,7 @@ class CoordinatorSnapshot:
     next_schedule: datetime | None = None
     priorities: Mapping[str, int] = field(default_factory=lambda: MappingProxyType({}))
     clip_states: Mapping[str, int] = field(default_factory=lambda: MappingProxyType({}))
+    history: Mapping[str, Mapping[str, Any]] = field(default_factory=lambda: MappingProxyType({}))
 
     @property
     def queue_depth(self) -> int | None:
@@ -120,6 +122,7 @@ class CinemaCollectionsCoordinator(DataUpdateCoordinator[CoordinatorSnapshot]):
         collections: Callable[[], Sequence[CollectionPolicy]],
         override: Callable[[], OverrideMode],
         schedules: Callable[[], Sequence[CompilationSchedule]] | None = None,
+        history: Callable[[], PlaybackHistoryStore | None] | None = None,
         entry: ConfigEntry | None = None,
         now: Callable[[], datetime] | None = None,
     ) -> None:
@@ -135,6 +138,7 @@ class CinemaCollectionsCoordinator(DataUpdateCoordinator[CoordinatorSnapshot]):
         self._collections = collections
         self._override = override
         self._schedules = schedules or (lambda: ())
+        self._history = history
         self._now = now or (lambda: datetime.now(UTC))
         self._failure_count = 0
 
@@ -145,6 +149,7 @@ class CinemaCollectionsCoordinator(DataUpdateCoordinator[CoordinatorSnapshot]):
         selection = resolve_active_collection(policies, self._override(), now)
         priorities = MappingProxyType({item.id: item.priority for item in policies})
         next_schedule = _next_schedule(tuple(self._schedules()), now)
+        history_snapshot = _history_snapshot(self._history)
         try:
             health, status, clips = await asyncio.gather(
                 self.client.async_health(),
@@ -166,6 +171,7 @@ class CinemaCollectionsCoordinator(DataUpdateCoordinator[CoordinatorSnapshot]):
                 error=str(error),
                 next_schedule=next_schedule,
                 priorities=priorities,
+                history=history_snapshot,
             )
 
         self._failure_count = 0
@@ -181,6 +187,7 @@ class CinemaCollectionsCoordinator(DataUpdateCoordinator[CoordinatorSnapshot]):
             next_schedule=next_schedule,
             priorities=priorities,
             clip_states=_clip_state_counts(clips),
+            history=history_snapshot,
         )
 
 
@@ -197,6 +204,18 @@ def _clip_state_counts(clips: Sequence[WorkerClip]) -> Mapping[str, int]:
     for clip in clips:
         counts[clip.state] = counts.get(clip.state, 0) + 1
     return MappingProxyType(dict(sorted(counts.items())))
+
+
+def _history_snapshot(
+    history: Callable[[], PlaybackHistoryStore | None] | None,
+) -> Mapping[str, Mapping[str, Any]]:
+    """Read playback history without mutating it; a missing store yields {}."""
+    if history is None:
+        return MappingProxyType({})
+    store = history()
+    if store is None:
+        return MappingProxyType({})
+    return store.snapshot()
 
 
 def _next_schedule(schedules: Sequence[CompilationSchedule], now: datetime) -> datetime | None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from homeassistant.helpers.selector import SelectSelector
 
 from custom_components.cinema_collections.const import (
     CONF_ENDPOINT,
@@ -18,6 +19,54 @@ from custom_components.cinema_collections.subentries import (
     WorkerValidationError,
     async_sync_collection,
 )
+
+
+def _profile_form(**overrides: object) -> dict[str, object]:
+    """Build the full flat field set for the profile subentry form."""
+    values: dict[str, object] = {
+        "profile_id": "4k",
+        "name": "Cinema 4K",
+        "video_width": 3840,
+        "video_height": 2160,
+        "video_fps": 24,
+        "video_codec": "libx264",
+        "video_preset": "fast",
+        "video_quality_mode": "crf",
+        "video_crf": 23.0,
+        "video_bitrate_kbps": "",
+        "video_h264_profile": "high",
+        "video_level": "5.1",
+        "video_pixel_format": "yuv420p",
+        "video_scaling_strategy": "aspect_fit",
+        "video_sar_num": 1,
+        "video_sar_den": 1,
+        "video_fast_start": True,
+        "audio_codec": "aac",
+        "audio_bitrate_kbps": 192,
+        "audio_channels": 2,
+        "audio_sample_rate": 48000,
+        "audio_missing_policy": "required",
+        "audio_fallback": "none",
+        "audio_pad_or_trim": True,
+        "loudness_mode": "two_pass",
+        "loudness_integrated_lufs": -18.0,
+        "loudness_true_peak_dbtp": -1.5,
+        "loudness_lra_lu": 11.0,
+        "loudness_final_mix_normalization": True,
+        "intro_to_clip_fade_seconds": 1.0,
+        "clip_to_outro_fade_seconds": 1.0,
+        "fade_in_seconds": 1.0,
+        "fade_out_seconds": 1.5,
+        "output_container": "mp4",
+        "hardware_acceleration": False,
+        "decode_error_policy": "warn",
+        "intro_reference": "",
+        "outro_reference": "",
+        "timeout_seconds": 300,
+        "minimum_segment_duration_seconds": "",
+    }
+    values.update(overrides)
+    return values
 
 
 class Client:
@@ -185,6 +234,70 @@ async def _pair(hass, aioclient_mock, worker_health_payload):
 
 
 @pytest.mark.asyncio
+async def test_collection_subentry_form_offers_known_worker_profiles_as_a_select(
+    hass, aioclient_mock, worker_health_payload
+) -> None:
+    """A typed profile ID is much easier to get right than a free-text field."""
+    entry = await _pair(hass, aioclient_mock, worker_health_payload)
+    aioclient_mock.get(
+        "http://worker.local/api/v1/profiles",
+        params={"page": "1", "page_size": "100"},
+        json={
+            "page": 1,
+            "page_size": 100,
+            "total": 1,
+            "items": [
+                {
+                    "id": "compatibility-4k-loudness",
+                    "name": "Compatibility 4K Loudness Profile",
+                    "version": 1,
+                    "settings": {},
+                    "revision": 1,
+                }
+            ],
+        },
+    )
+
+    shown = await hass.config_entries.subentries.async_init(
+        (entry.entry_id, SUBENTRY_COLLECTION),
+        context={"source": "user"},
+    )
+
+    assert shown["type"] == "form"
+    field = next(key for key in shown["data_schema"].schema if str(key) == "processing_profile_id")
+    profile_selector = shown["data_schema"].schema[field]
+    assert isinstance(profile_selector, SelectSelector)
+    assert profile_selector.config["options"] == [
+        {
+            "value": "compatibility-4k-loudness",
+            "label": "Compatibility 4K Loudness Profile (compatibility-4k-loudness)",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_collection_subentry_form_falls_back_to_free_text_when_worker_is_unreachable(
+    hass, aioclient_mock, worker_health_payload
+) -> None:
+    """A transient Worker outage must not block opening the collection form."""
+    entry = await _pair(hass, aioclient_mock, worker_health_payload)
+    aioclient_mock.get(
+        "http://worker.local/api/v1/profiles",
+        params={"page": "1", "page_size": "100"},
+        exc=TimeoutError(),
+    )
+
+    shown = await hass.config_entries.subentries.async_init(
+        (entry.entry_id, SUBENTRY_COLLECTION),
+        context={"source": "user"},
+    )
+
+    assert shown["type"] == "form"
+    field = next(key for key in shown["data_schema"].schema if str(key) == "processing_profile_id")
+    assert shown["data_schema"].schema[field] is str
+
+
+@pytest.mark.asyncio
 async def test_collection_subentry_flow_creates_and_reconfigures_with_worker_revision(
     hass, aioclient_mock, worker_health_payload
 ) -> None:
@@ -245,7 +358,7 @@ async def test_profile_subentry_flow_creates_and_reports_worker_validation(
     created = await hass.config_entries.subentries.async_init(
         (entry.entry_id, SUBENTRY_PROFILE),
         context={"source": "user"},
-        data={"profile_id": "4k", "name": "4K", "settings": "{}"},
+        data=_profile_form(),
     )
     assert created["type"] == "create_entry"
     assert any(item.subentry_type == SUBENTRY_PROFILE for item in entry.subentries.values())
@@ -264,7 +377,7 @@ async def test_profile_subentry_flow_creates_and_reports_worker_validation(
     invalid = await hass.config_entries.subentries.async_init(
         (entry.entry_id, SUBENTRY_PROFILE),
         context={"source": "user"},
-        data={"profile_id": "hd", "name": "HD", "settings": "{}"},
+        data=_profile_form(profile_id="hd", name="HD"),
     )
     assert invalid["type"] == "form"
     assert invalid["errors"] == {"base": "worker_validation"}
@@ -279,7 +392,7 @@ async def test_profile_subentry_flow_reconfigures_with_optimistic_revision(
     created = await hass.config_entries.subentries.async_init(
         (entry.entry_id, SUBENTRY_PROFILE),
         context={"source": "user"},
-        data={"profile_id": "4k", "name": "4K", "settings": "{}"},
+        data=_profile_form(),
     )
     assert created["type"] == "create_entry"
     subentry = next(
@@ -290,7 +403,7 @@ async def test_profile_subentry_flow_reconfigures_with_optimistic_revision(
     result = await hass.config_entries.subentries.async_init(
         (entry.entry_id, SUBENTRY_PROFILE),
         context={"source": "reconfigure", "subentry_id": subentry.subentry_id},
-        data={"profile_id": "4k", "name": "Cinema 4K", "settings": "{}"},
+        data=_profile_form(name="Cinema 4K"),
     )
 
     assert result["type"] == "abort"

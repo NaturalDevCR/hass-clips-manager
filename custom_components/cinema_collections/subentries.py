@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import json
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from types import MappingProxyType
@@ -18,11 +17,13 @@ from homeassistant.config_entries import (
     SubentryFlowResult,
 )
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import selector
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.util import dt as dt_util
 
 from .api_client import WorkerApiClient, WorkerApiError
 from .const import CONF_ENDPOINT, CONF_TOKEN, SUBENTRY_COLLECTION, SUBENTRY_PROFILE
+from .models import WorkerProfileSummary
 from .resolver import CollectionPolicy
 from .scheduler import CompilationSchedule, schedules_from_mapping
 
@@ -31,6 +32,10 @@ _COLLECTION_ID = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
 class WorkerValidationError(ValueError):
     """A Worker validation or optimistic-concurrency error safe for config flows."""
+
+
+class ProfileAudioPolicyError(ValueError):
+    """A missing-audio policy the Worker forbids, surfaced as a form error."""
 
 
 def _check_identifier(value: str, label: str) -> str:
@@ -352,15 +357,122 @@ def async_update_collection_subentry(
     )
 
 
-def parse_profile_settings(value: str) -> Mapping[str, object]:
-    """Parse the flow's JSON profile editor without accepting arbitrary YAML."""
-    try:
-        parsed = json.loads(value)
-    except (TypeError, json.JSONDecodeError) as error:
-        raise WorkerValidationError("profile settings must be valid JSON") from error
-    if not isinstance(parsed, Mapping):
-        raise WorkerValidationError("profile settings must be a JSON object")
-    return dict(cast(Mapping[str, object], parsed))
+def _positive(value: object) -> object:
+    """Reject zero and negative numbers to mirror strict Worker bounds."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+        raise vol.Invalid("value must be greater than zero")
+    return value
+
+
+_INT_GT_0 = vol.All(vol.Coerce(int), vol.Range(min=1))
+_INT_1_16384 = vol.All(vol.Coerce(int), vol.Range(min=1, max=16384))
+_INT_1_240 = vol.All(vol.Coerce(int), vol.Range(min=1, max=240))
+_INT_1_8 = vol.All(vol.Coerce(int), vol.Range(min=1, max=8))
+_FLOAT_0_51 = vol.All(vol.Coerce(float), vol.Range(min=0, max=51))
+_FLOAT_M70_M5 = vol.All(vol.Coerce(float), vol.Range(min=-70, max=-5))
+_FLOAT_M20_0 = vol.All(vol.Coerce(float), vol.Range(min=-20, max=0))
+_FLOAT_1_50 = vol.All(vol.Coerce(float), vol.Range(min=1, max=50))
+_FLOAT_0_60 = vol.All(vol.Coerce(float), vol.Range(min=0, max=60))
+_FLOAT_GT_0_LE_60 = vol.All(vol.Coerce(float), vol.Range(max=60), _positive)
+_FLOAT_GT_0 = vol.All(vol.Coerce(float), _positive)
+_OPTIONAL_POSITIVE_INT = vol.Any(_INT_GT_0, "")
+_OPTIONAL_POSITIVE_FLOAT = vol.Any(_FLOAT_GT_0, "")
+
+
+def _choice_selector(choices: Sequence[tuple[str, str]]) -> Any:
+    """Build a dropdown of stable enum values with explicit inline labels."""
+    return selector.SelectSelector(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+        selector.SelectSelectorConfig(
+            options=[
+                selector.SelectOptionDict(value=value, label=label) for value, label in choices
+            ],
+            mode=selector.SelectSelectorMode.DROPDOWN,
+        )
+    )
+
+
+def _as_mapping(value: object) -> Mapping[str, object]:
+    if isinstance(value, Mapping):
+        return cast(Mapping[str, object], value)
+    return {}
+
+
+def _to_int(value: object) -> int:
+    return int(str(value))
+
+
+def _to_float(value: object) -> float:
+    return float(str(value))
+
+
+def _transition_durations(transitions: object) -> tuple[float, float]:
+    """Read the two supported fade durations from a stored transitions list."""
+    if not isinstance(transitions, (list, tuple)):
+        return 1.0, 1.0
+    items = cast(list[object] | tuple[object, ...], transitions)
+    if len(items) < 2:
+        return 1.0, 1.0
+    durations: list[float] = []
+    for item in items[:2]:
+        if not isinstance(item, Mapping):
+            return 1.0, 1.0
+        duration = cast(Mapping[str, object], item).get("duration_seconds")
+        if isinstance(duration, bool) or not isinstance(duration, (int, float)):
+            return 1.0, 1.0
+        durations.append(float(duration))
+    return durations[0], durations[1]
+
+
+def _profile_form_values(settings: Mapping[str, object]) -> dict[str, object]:
+    """Flatten a stored nested profile into field-by-field form defaults."""
+    video = _as_mapping(settings.get("video"))
+    audio = _as_mapping(settings.get("audio"))
+    loudness = _as_mapping(settings.get("loudness"))
+    output = _as_mapping(settings.get("output"))
+    quality = _as_mapping(video.get("quality"))
+    scaling = _as_mapping(video.get("scaling"))
+    missing_policy = _as_mapping(audio.get("missing_policy"))
+    intro_fade, outro_fade = _transition_durations(settings.get("transitions"))
+    return {
+        "video_width": video.get("width", 3840),
+        "video_height": video.get("height", 2160),
+        "video_fps": video.get("fps", 24),
+        "video_codec": video.get("codec", "libx264"),
+        "video_preset": video.get("preset", "fast"),
+        "video_quality_mode": quality.get("mode", "crf"),
+        "video_crf": quality.get("crf", 23.0),
+        "video_bitrate_kbps": quality.get("bitrate_kbps", ""),
+        "video_h264_profile": video.get("h264_profile", "high"),
+        "video_level": video.get("level", "5.1"),
+        "video_pixel_format": video.get("pixel_format", "yuv420p"),
+        "video_scaling_strategy": scaling.get("strategy", "aspect_fit"),
+        "video_sar_num": scaling.get("sar_num", 1),
+        "video_sar_den": scaling.get("sar_den", 1),
+        "video_fast_start": video.get("fast_start", True),
+        "audio_codec": audio.get("codec", "aac"),
+        "audio_bitrate_kbps": audio.get("bitrate_kbps", 192),
+        "audio_channels": audio.get("channels", 2),
+        "audio_sample_rate": audio.get("sample_rate", 48000),
+        "audio_missing_policy": missing_policy.get("mode", "required"),
+        "audio_fallback": audio.get("fallback", "none"),
+        "audio_pad_or_trim": audio.get("pad_or_trim", True),
+        "loudness_mode": loudness.get("mode", "two_pass"),
+        "loudness_integrated_lufs": loudness.get("integrated_lufs", -18.0),
+        "loudness_true_peak_dbtp": loudness.get("true_peak_dbtp", -1.5),
+        "loudness_lra_lu": loudness.get("lra_lu", 11.0),
+        "loudness_final_mix_normalization": loudness.get("final_mix_normalization", True),
+        "intro_to_clip_fade_seconds": intro_fade,
+        "clip_to_outro_fade_seconds": outro_fade,
+        "fade_in_seconds": settings.get("fade_in_seconds", 1.0),
+        "fade_out_seconds": settings.get("fade_out_seconds", 1.5),
+        "output_container": output.get("container", "mp4"),
+        "hardware_acceleration": settings.get("hardware_acceleration", False),
+        "decode_error_policy": settings.get("decode_error_policy", "warn"),
+        "intro_reference": settings.get("intro_reference") or "",
+        "outro_reference": settings.get("outro_reference") or "",
+        "timeout_seconds": settings.get("timeout_seconds", 300),
+        "minimum_segment_duration_seconds": settings.get("minimum_segment_duration_seconds") or "",
+    }
 
 
 class CollectionSubentryFlow(config_entries.ConfigSubentryFlow):
@@ -404,9 +516,17 @@ class CollectionSubentryFlow(config_entries.ConfigSubentryFlow):
                     title=synchronized.name,
                     data=synchronized.as_dict(),
                 )
+        try:
+            profiles = await worker_client_for_entry(
+                self.hass, self._get_entry()
+            ).async_list_profiles()
+        except WorkerApiError:
+            # A transient Worker outage must not block showing the form; the
+            # profile field falls back to free text in that case.
+            profiles = ()
         return self.async_show_form(
             step_id="reconfigure" if existing is not None else "user",
-            data_schema=_collection_schema(existing),
+            data_schema=_collection_schema(existing, profiles),
             errors=errors,
         )
 
@@ -433,6 +553,8 @@ class ProfileSubentryFlow(config_entries.ConfigSubentryFlow):
                 synchronized = await async_sync_profile(
                     worker_client_for_entry(self.hass, self._get_entry()), candidate
                 )
+            except ProfileAudioPolicyError:
+                errors["base"] = "profile_audio_policy"
             except WorkerValidationError:
                 errors["base"] = "worker_validation"
             except (KeyError, TypeError, ValueError):
@@ -457,7 +579,31 @@ class ProfileSubentryFlow(config_entries.ConfigSubentryFlow):
         )
 
 
-def _collection_schema(existing: CollectionSubentryData | None) -> vol.Schema:
+def _profile_selector(profiles: Sequence[WorkerProfileSummary]) -> Any:
+    """Build a dropdown of known Worker profiles, falling back to free text.
+
+    Falls back to a plain text field (instead of an empty, unusable dropdown)
+    when the Worker's profile list could not be fetched (e.g. transiently
+    unreachable), so the flow never blocks collection creation on that.
+    """
+    if not profiles:
+        return str
+    return selector.SelectSelector(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+        selector.SelectSelectorConfig(
+            options=[
+                selector.SelectOptionDict(value=profile.id, label=f"{profile.name} ({profile.id})")
+                for profile in profiles
+            ],
+            mode=selector.SelectSelectorMode.DROPDOWN,
+            custom_value=True,
+        )
+    )
+
+
+def _collection_schema(
+    existing: CollectionSubentryData | None,
+    profiles: Sequence[WorkerProfileSummary] = (),
+) -> vol.Schema:
     values = existing.as_dict() if existing else {}
     raw_schedule: object = values.get("schedule", {})
     schedule: dict[str, object] = (
@@ -476,7 +622,7 @@ def _collection_schema(existing: CollectionSubentryData | None) -> vol.Schema:
             vol.Required("source_directory", default=values.get("source_directory", "")): str,
             vol.Required(
                 "processing_profile_id", default=values.get("processing_profile_id", "")
-            ): str,
+            ): _profile_selector(profiles),
             vol.Required("enabled", default=values.get("enabled", True)): bool,
             vol.Required("priority", default=values.get("priority", 0)): vol.Coerce(int),
             vol.Optional("starts_at", default=values.get("starts_at") or ""): str,
@@ -563,15 +709,178 @@ def _collection_from_flow_input(
 
 def _profile_schema(existing: ProfileSubentryData | None) -> vol.Schema:
     values = existing.as_dict() if existing else {}
+    raw_settings: object = values.get("settings", {})
+    form = _profile_form_values(
+        dict(cast(Mapping[str, object], raw_settings)) if isinstance(raw_settings, Mapping) else {}
+    )
     return vol.Schema(
         {
             vol.Required("profile_id", default=values.get("profile_id", "")): str,
             vol.Required("name", default=values.get("name", "")): str,
+            vol.Required("video_width", default=form["video_width"]): _INT_1_16384,
+            vol.Required("video_height", default=form["video_height"]): _INT_1_16384,
+            vol.Required("video_fps", default=form["video_fps"]): _INT_1_240,
+            vol.Required("video_codec", default=form["video_codec"]): str,
+            vol.Required("video_preset", default=form["video_preset"]): str,
             vol.Required(
-                "settings", default=json.dumps(values.get("settings", {}), sort_keys=True)
-            ): str,
+                "video_quality_mode", default=form["video_quality_mode"]
+            ): _choice_selector([("crf", "CRF"), ("bitrate", "Bitrate")]),
+            vol.Required("video_crf", default=form["video_crf"]): _FLOAT_0_51,
+            vol.Optional(
+                "video_bitrate_kbps", default=form["video_bitrate_kbps"]
+            ): _OPTIONAL_POSITIVE_INT,
+            vol.Required("video_h264_profile", default=form["video_h264_profile"]): str,
+            vol.Required("video_level", default=form["video_level"]): str,
+            vol.Required("video_pixel_format", default=form["video_pixel_format"]): str,
+            vol.Required(
+                "video_scaling_strategy", default=form["video_scaling_strategy"]
+            ): _choice_selector([("aspect_fit", "Aspect fit"), ("crop", "Crop")]),
+            vol.Required("video_sar_num", default=form["video_sar_num"]): _INT_GT_0,
+            vol.Required("video_sar_den", default=form["video_sar_den"]): _INT_GT_0,
+            vol.Required("video_fast_start", default=form["video_fast_start"]): bool,
+            vol.Required("audio_codec", default=form["audio_codec"]): str,
+            vol.Required("audio_bitrate_kbps", default=form["audio_bitrate_kbps"]): _INT_GT_0,
+            vol.Required("audio_channels", default=form["audio_channels"]): _INT_1_8,
+            vol.Required("audio_sample_rate", default=form["audio_sample_rate"]): _INT_GT_0,
+            vol.Required(
+                "audio_missing_policy", default=form["audio_missing_policy"]
+            ): _choice_selector([("required", "Required"), ("silence", "Silence")]),
+            vol.Required("audio_fallback", default=form["audio_fallback"]): _choice_selector(
+                [("none", "None"), ("silence", "Silence")]
+            ),
+            vol.Required("audio_pad_or_trim", default=form["audio_pad_or_trim"]): bool,
+            vol.Required("loudness_mode", default=form["loudness_mode"]): _choice_selector(
+                [("two_pass", "Two pass"), ("disabled", "Disabled")]
+            ),
+            vol.Required(
+                "loudness_integrated_lufs", default=form["loudness_integrated_lufs"]
+            ): _FLOAT_M70_M5,
+            vol.Required(
+                "loudness_true_peak_dbtp", default=form["loudness_true_peak_dbtp"]
+            ): _FLOAT_M20_0,
+            vol.Required("loudness_lra_lu", default=form["loudness_lra_lu"]): _FLOAT_1_50,
+            vol.Required(
+                "loudness_final_mix_normalization", default=form["loudness_final_mix_normalization"]
+            ): bool,
+            vol.Required(
+                "intro_to_clip_fade_seconds", default=form["intro_to_clip_fade_seconds"]
+            ): _FLOAT_GT_0_LE_60,
+            vol.Required(
+                "clip_to_outro_fade_seconds", default=form["clip_to_outro_fade_seconds"]
+            ): _FLOAT_GT_0_LE_60,
+            vol.Required("fade_in_seconds", default=form["fade_in_seconds"]): _FLOAT_0_60,
+            vol.Required("fade_out_seconds", default=form["fade_out_seconds"]): _FLOAT_0_60,
+            vol.Required("output_container", default=form["output_container"]): _choice_selector(
+                [("mp4", "MP4"), ("mkv", "MKV"), ("webm", "WebM")]
+            ),
+            vol.Required("hardware_acceleration", default=form["hardware_acceleration"]): bool,
+            vol.Required(
+                "decode_error_policy", default=form["decode_error_policy"]
+            ): _choice_selector([("warn", "Warn"), ("fail", "Fail")]),
+            vol.Optional("intro_reference", default=form["intro_reference"]): str,
+            vol.Optional("outro_reference", default=form["outro_reference"]): str,
+            vol.Required("timeout_seconds", default=form["timeout_seconds"]): _INT_GT_0,
+            vol.Optional(
+                "minimum_segment_duration_seconds",
+                default=form["minimum_segment_duration_seconds"],
+            ): _OPTIONAL_POSITIVE_FLOAT,
         }
     )
+
+
+def _profile_settings_from_flow_input(user_input: Mapping[str, object]) -> dict[str, object]:
+    """Reassemble flat flow fields into the Worker's nested profile contract."""
+    quality_mode = str(user_input["video_quality_mode"])
+    if quality_mode == "bitrate":
+        raw_bitrate = user_input.get("video_bitrate_kbps")
+        if raw_bitrate in (None, ""):
+            raise ValueError("bitrate video quality requires a bitrate")
+        quality: dict[str, object] = {"mode": "bitrate", "bitrate_kbps": _to_int(raw_bitrate)}
+    else:
+        quality = {"mode": "crf", "crf": _to_float(user_input["video_crf"])}
+
+    scaling_strategy = str(user_input["video_scaling_strategy"])
+    scaling: dict[str, object] = {
+        "strategy": scaling_strategy,
+        "width": _to_int(user_input["video_width"]),
+        "height": _to_int(user_input["video_height"]),
+    }
+    if scaling_strategy == "aspect_fit":
+        scaling["sar_num"] = _to_int(user_input["video_sar_num"])
+        scaling["sar_den"] = _to_int(user_input["video_sar_den"])
+
+    audio_policy = str(user_input["audio_missing_policy"])
+    audio_fallback = str(user_input["audio_fallback"])
+    if audio_policy == "required" and audio_fallback != "none":
+        raise ProfileAudioPolicyError("required audio cannot use a silence fallback")
+
+    loudness_mode = str(user_input["loudness_mode"])
+    loudness: dict[str, object] = {
+        "mode": loudness_mode,
+        "final_mix_normalization": bool(user_input["loudness_final_mix_normalization"]),
+    }
+    if loudness_mode == "two_pass":
+        loudness["integrated_lufs"] = _to_float(user_input["loudness_integrated_lufs"])
+        loudness["true_peak_dbtp"] = _to_float(user_input["loudness_true_peak_dbtp"])
+        loudness["lra_lu"] = _to_float(user_input["loudness_lra_lu"])
+
+    output_container = str(user_input["output_container"])
+    raw_minimum = user_input.get("minimum_segment_duration_seconds")
+    minimum_segment_duration = _to_float(raw_minimum) if raw_minimum not in (None, "") else None
+
+    return {
+        "video": {
+            "width": _to_int(user_input["video_width"]),
+            "height": _to_int(user_input["video_height"]),
+            "fps": _to_int(user_input["video_fps"]),
+            "codec": str(user_input["video_codec"]),
+            "preset": str(user_input["video_preset"]),
+            "quality": quality,
+            "h264_profile": str(user_input["video_h264_profile"]),
+            "level": str(user_input["video_level"]),
+            "pixel_format": str(user_input["video_pixel_format"]),
+            "scaling": scaling,
+            "fast_start": bool(user_input["video_fast_start"]),
+        },
+        "audio": {
+            "codec": str(user_input["audio_codec"]),
+            "bitrate_kbps": _to_int(user_input["audio_bitrate_kbps"]),
+            "channels": _to_int(user_input["audio_channels"]),
+            "sample_rate": _to_int(user_input["audio_sample_rate"]),
+            "missing_policy": {"mode": audio_policy},
+            "fallback": audio_fallback,
+            "pad_or_trim": bool(user_input["audio_pad_or_trim"]),
+        },
+        "loudness": loudness,
+        "transitions": [
+            {
+                "type": "fade",
+                "duration_seconds": _to_float(user_input["intro_to_clip_fade_seconds"]),
+                "from_segment": "intro",
+                "to_segment": "clip",
+            },
+            {
+                "type": "fade",
+                "duration_seconds": _to_float(user_input["clip_to_outro_fade_seconds"]),
+                "from_segment": "clip",
+                "to_segment": "outro",
+            },
+        ],
+        "fade_in_seconds": _to_float(user_input["fade_in_seconds"]),
+        "fade_out_seconds": _to_float(user_input["fade_out_seconds"]),
+        "output": {
+            "container": output_container,
+            "extension": output_container,
+            "atomic_finalize": True,
+            "temporary_output": True,
+        },
+        "hardware_acceleration": bool(user_input["hardware_acceleration"]),
+        "decode_error_policy": str(user_input["decode_error_policy"]),
+        "intro_reference": str(user_input.get("intro_reference") or "") or None,
+        "outro_reference": str(user_input.get("outro_reference") or "") or None,
+        "timeout_seconds": _to_int(user_input["timeout_seconds"]),
+        "minimum_segment_duration_seconds": minimum_segment_duration,
+    }
 
 
 def _profile_from_flow_input(
@@ -583,6 +892,6 @@ def _profile_from_flow_input(
     return ProfileSubentryData(
         profile_id=profile_id,
         name=str(user_input["name"]),
-        settings=parse_profile_settings(str(user_input["settings"])),
+        settings=_profile_settings_from_flow_input(user_input),
         worker_revision=existing.worker_revision if existing else None,
     )

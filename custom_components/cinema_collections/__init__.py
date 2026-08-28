@@ -110,6 +110,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             for collection in collection_subentries(entry)
             for schedule in collection.schedules()
         ),
+        history=lambda: history,
     )
     # Worker disconnects become a degraded snapshot, so setup remains available
     # for local policy/history and a later automatic refresh can reconnect.

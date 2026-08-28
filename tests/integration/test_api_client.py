@@ -15,7 +15,12 @@ from custom_components.cinema_collections.api_client import (
     WorkerApiProtocolError,
 )
 from custom_components.cinema_collections.const import CONF_ENDPOINT, CONF_TOKEN, DOMAIN
-from custom_components.cinema_collections.models import WorkerClip, WorkerHealth, WorkerStatus
+from custom_components.cinema_collections.models import (
+    WorkerClip,
+    WorkerHealth,
+    WorkerProfileSummary,
+    WorkerStatus,
+)
 
 
 class FakeResponse:
@@ -92,6 +97,21 @@ CLIPS_PAGE = {
     ],
 }
 
+PROFILES_PAGE = {
+    "page": 1,
+    "page_size": 100,
+    "total": 1,
+    "items": [
+        {
+            "id": "compatibility-4k-loudness",
+            "name": "Compatibility 4K Loudness Profile",
+            "version": 1,
+            "settings": {},
+            "revision": 1,
+        }
+    ],
+}
+
 
 @pytest.mark.asyncio
 async def test_health_uses_bearer_auth_and_parses_contract() -> None:
@@ -133,7 +153,22 @@ async def test_list_clips_parses_paginated_worker_availability() -> None:
             output_available=True,
         ),
     )
-    assert session.calls[0]["url"] == "http://worker.local/api/v1/clips?page=1&page_size=100"
+
+
+@pytest.mark.asyncio
+async def test_list_profiles_parses_paginated_worker_profiles() -> None:
+    """The collection subentry flow's profile picker depends on this shape."""
+    session = FakeSession(FakeResponse(200, PROFILES_PAGE))
+    client = WorkerApiClient("http://worker.local", "token", session)
+
+    profiles = await client.async_list_profiles()
+
+    assert profiles == (
+        WorkerProfileSummary(
+            id="compatibility-4k-loudness", name="Compatibility 4K Loudness Profile"
+        ),
+    )
+    assert session.calls[0]["url"] == "http://worker.local/api/v1/profiles?page=1&page_size=100"
 
 
 @pytest.mark.asyncio

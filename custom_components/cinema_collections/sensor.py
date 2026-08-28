@@ -135,6 +135,7 @@ class CinemaCollectionsSensor(CoordinatorEntity[CinemaCollectionsCoordinator], S
             "collection_priorities": dict(snapshot.priorities),
             "compilation_summary": snapshot.compilation_summary,
             "clip_states": dict(snapshot.clip_states),
+            "history": dict(snapshot.history),
         }
         if snapshot.status is not None and snapshot.status.current_job is not None:
             attributes["current_job"] = dict(snapshot.status.current_job)

@@ -211,3 +211,47 @@ async def test_lock_prevents_concurrent_selections_from_repeating_a_clip(hass: o
     )
 
     assert {first.clip_id, second.clip_id} == {"clip-a", "clip-b"}
+
+
+@pytest.mark.asyncio
+async def test_snapshot_is_empty_before_any_selection(hass: object) -> None:
+    """An unused store exposes no history without inventing collection records."""
+    clock = Clock(datetime(2026, 8, 27, 20, tzinfo=UTC))
+    history = make_history(hass, clock, "history-snapshot-empty")
+    await history.async_setup()
+
+    assert history.snapshot() == {}
+
+
+@pytest.mark.asyncio
+async def test_snapshot_reports_one_selection_summary(hass: object) -> None:
+    """The snapshot exposes counts, never the unbounded played-clip ID list."""
+    clock = Clock(datetime(2026, 8, 27, 20, tzinfo=UTC))
+    history = make_history(hass, clock, "history-snapshot-one")
+    await history.async_setup()
+    await history.async_select("films", ("clip-a", "clip-b"), dry_run=False)
+
+    assert history.snapshot() == {
+        "films": {
+            "round_number": 1,
+            "played_count": 1,
+            "last_selected_clip_id": "clip-a",
+            "last_reset_at": None,
+        }
+    }
+
+
+@pytest.mark.asyncio
+async def test_snapshot_reflects_reset_round_and_played_count(hass: object) -> None:
+    """A reset starts a new round and clears the played count in the snapshot."""
+    clock = Clock(datetime(2026, 8, 27, 20, tzinfo=UTC))
+    history = make_history(hass, clock, "history-snapshot-reset")
+    await history.async_setup()
+    await history.async_select("films", ("clip-a", "clip-b"), dry_run=False)
+    await history.async_reset("films")
+
+    snapshot = history.snapshot()
+    assert snapshot["films"]["round_number"] == 2
+    assert snapshot["films"]["played_count"] == 0
+    assert snapshot["films"]["last_selected_clip_id"] is None
+    assert snapshot["films"]["last_reset_at"] == dt_util.as_local(clock.value).isoformat()
