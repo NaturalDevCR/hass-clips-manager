@@ -9,7 +9,6 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime
 from types import MappingProxyType
 from typing import Any, cast
-from uuid import uuid4
 
 import voluptuous as vol
 from homeassistant import config_entries
@@ -236,11 +235,11 @@ async def async_sync_collection(
     client: WorkerApiClient, collection: CollectionSubentryData
 ) -> CollectionSubentryData:
     """Create or revision-patch a Worker collection before saving local policy."""
-    key = str(uuid4())
+    create_key = f"collection:{collection.collection_id}:create"
     try:
         if collection.worker_revision is None:
             response = await client.async_create_collection(
-                collection.worker_create_payload(), idempotency_key=key
+                collection.worker_create_payload(), idempotency_key=create_key
             )
             revision = _revision(response)
             # The Worker create contract intentionally has a small safe surface.
@@ -255,14 +254,16 @@ async def async_sync_collection(
                     collection.collection_id,
                     revision,
                     collection.worker_patch_payload(),
-                    idempotency_key=str(uuid4()),
+                    idempotency_key=f"collection:{collection.collection_id}:patch:{revision}",
                 )
         else:
             response = await client.async_patch_collection(
                 collection.collection_id,
                 collection.worker_revision,
                 collection.worker_patch_payload(),
-                idempotency_key=key,
+                idempotency_key=(
+                    f"collection:{collection.collection_id}:patch:{collection.worker_revision}"
+                ),
             )
     except (WorkerApiError, WorkerValidationError) as error:
         raise WorkerValidationError(str(error)) from error
@@ -273,7 +274,7 @@ async def async_sync_profile(
     client: WorkerApiClient, profile: ProfileSubentryData
 ) -> ProfileSubentryData:
     """Create or revision-patch a Worker profile before saving local policy."""
-    key = str(uuid4())
+    create_key = f"profile:{profile.profile_id}:create"
     try:
         if profile.worker_revision is None:
             response = await client.async_create_profile(
@@ -282,14 +283,14 @@ async def async_sync_profile(
                     "name": profile.name,
                     "settings": dict(profile.settings),
                 },
-                idempotency_key=key,
+                idempotency_key=create_key,
             )
         else:
             response = await client.async_patch_profile(
                 profile.profile_id,
                 profile.worker_revision,
                 {"name": profile.name, "settings": dict(profile.settings)},
-                idempotency_key=key,
+                idempotency_key=f"profile:{profile.profile_id}:patch:{profile.worker_revision}",
             )
     except (WorkerApiError, WorkerValidationError) as error:
         raise WorkerValidationError(str(error)) from error

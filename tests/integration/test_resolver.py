@@ -55,8 +55,8 @@ def test_resolver_rejects_explicit_override_when_not_permitted() -> None:
         datetime(2026, 8, 27, 12, tzinfo=UTC),
     )
 
-    assert result.id == "fallback"
-    assert result.reason is SelectionReason.DEFAULT
+    assert result.collection is None
+    assert result.reason is SelectionReason.NONE
     assert result.override_rejected is True
 
 

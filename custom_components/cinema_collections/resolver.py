@@ -151,9 +151,6 @@ def resolve_active_collection(
         selected = next((item for item in collections if item.id == override.collection_id), None)
         if selected is not None and selected.enabled and selected.allow_manual_override:
             return SelectionResult(selected, SelectionReason.MANUAL)
-        fallback = _default_collection(collections)
-        if fallback is not None:
-            return SelectionResult(fallback, SelectionReason.DEFAULT, override_rejected=True)
         return SelectionResult(None, SelectionReason.NONE, override_rejected=True)
 
     default = _default_collection(collections)

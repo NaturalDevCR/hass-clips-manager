@@ -16,10 +16,18 @@ from .const import CONF_SCHEDULE_RUN_TOKENS
 
 
 class RunTokenStore(Protocol):
-    """A durable, atomic-enough occurrence claim store."""
+    """A durable occurrence state store."""
 
-    async def async_claim(self, token: str) -> bool:
-        """Claim ``token`` and return false if it was already claimed."""
+    async def async_begin(self, token: str) -> bool:
+        """Mark an occurrence pending unless it has already succeeded."""
+        ...
+
+    async def async_succeed(self, token: str) -> None:
+        """Record Worker acceptance for an occurrence."""
+        ...
+
+    async def async_fail(self, token: str) -> None:
+        """Record a failed dispatch that may safely be retried."""
         ...
 
 
@@ -27,17 +35,22 @@ class RunTokenStore(Protocol):
 class InMemoryRunTokenStore:
     """Simple token store useful for tests and ephemeral callers."""
 
-    tokens: set[str]
+    states: dict[str, str]
 
     def __init__(self, tokens: set[str] | None = None) -> None:
-        initial_tokens: set[str] = set(tokens) if tokens is not None else set()
-        self.tokens = initial_tokens
+        self.states = {token: "succeeded" for token in tokens or set()}
 
-    async def async_claim(self, token: str) -> bool:
-        if token in self.tokens:
+    async def async_begin(self, token: str) -> bool:
+        if self.states.get(token) == "succeeded":
             return False
-        self.tokens.add(token)
+        self.states[token] = "pending"
         return True
+
+    async def async_succeed(self, token: str) -> None:
+        self.states[token] = "succeeded"
+
+    async def async_fail(self, token: str) -> None:
+        self.states[token] = "failed"
 
 
 class ConfigEntryRunTokenStore:
@@ -47,22 +60,45 @@ class ConfigEntryRunTokenStore:
         self._hass = hass
         self._entry = entry
 
-    async def async_claim(self, token: str) -> bool:
+    def _states(self) -> dict[str, str]:
         configured: object = self._entry.options.get(CONF_SCHEDULE_RUN_TOKENS, ())
+        # Version one stored a list of completed tokens. Preserve those claims
+        # while migrating in place to explicit pending/failed/succeeded states.
+        if isinstance(configured, Mapping):
+            return {
+                str(key): str(value)
+                for key, value in cast(Mapping[object, object], configured).items()
+                if isinstance(key, str) and value in {"pending", "failed", "succeeded"}
+            }
         if isinstance(configured, (list, tuple, set)) and all(
             isinstance(value, str) for value in cast(Sequence[object], configured)
         ):
-            tokens: set[str] = {str(value) for value in cast(Sequence[object], configured)}
-        else:
-            tokens = set()
-        if token in tokens:
-            return False
-        tokens.add(token)
+            return {str(value): "succeeded" for value in cast(Sequence[object], configured)}
+        return {}
+
+    def _persist(self, states: Mapping[str, str]) -> None:
         self._hass.config_entries.async_update_entry(
             self._entry,
-            options={**self._entry.options, CONF_SCHEDULE_RUN_TOKENS: sorted(tokens)},
+            options={**self._entry.options, CONF_SCHEDULE_RUN_TOKENS: dict(sorted(states.items()))},
         )
+
+    async def async_begin(self, token: str) -> bool:
+        states = self._states()
+        if states.get(token) == "succeeded":
+            return False
+        states[token] = "pending"
+        self._persist(states)
         return True
+
+    async def async_succeed(self, token: str) -> None:
+        states = self._states()
+        states[token] = "succeeded"
+        self._persist(states)
+
+    async def async_fail(self, token: str) -> None:
+        states = self._states()
+        states[token] = "failed"
+        self._persist(states)
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,19 +173,24 @@ class CompilationScheduler:
             ):
                 continue
             token = self._token(schedule, local_now)
-            if not await self._token_store.async_claim(token):
+            if not await self._token_store.async_begin(token):
                 continue
-            if schedule.strategy == "scan_only":
-                await self._client.async_scan(
-                    collection_ids=[schedule.collection_id], idempotency_key=token
-                )
-            else:
-                await self._client.async_compile(
-                    schedule.collection_id,
-                    strategy=schedule.strategy,
-                    skip_if_processing=schedule.skip_if_processing,
-                    idempotency_key=token,
-                )
+            try:
+                if schedule.strategy == "scan_only":
+                    await self._client.async_scan(
+                        collection_ids=[schedule.collection_id], idempotency_key=token
+                    )
+                else:
+                    await self._client.async_compile(
+                        schedule.collection_id,
+                        strategy=schedule.strategy,
+                        skip_if_processing=schedule.skip_if_processing,
+                        idempotency_key=token,
+                    )
+            except Exception:
+                await self._token_store.async_fail(token)
+                raise
+            await self._token_store.async_succeed(token)
             runs.append(ScheduledRun(schedule.collection_id, token, schedule.strategy))
         return runs
 
