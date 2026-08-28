@@ -26,6 +26,8 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Compute lowercase image repository
+        run: echo "IMAGE_REPOSITORY=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/cinema-collections-worker" >> "$GITHUB_ENV"
       - uses: docker/build-push-action@v6
         with:
           context: app
@@ -34,8 +36,8 @@ jobs:
           build-args: BUILD_ARCH=${{ matrix.build_arch }}
           push: ${{ github.event_name == 'push' }}
           tags: |
-            ghcr.io/${{ github.repository_owner }}/cinema-collections-worker:${{ matrix.build_arch }}
-            ghcr.io/${{ github.repository_owner }}/cinema-collections-worker:${{ github.sha }}-${{ matrix.build_arch }}
+            ${{ env.IMAGE_REPOSITORY }}:${{ matrix.build_arch }}
+            ${{ env.IMAGE_REPOSITORY }}:${{ github.sha }}-${{ matrix.build_arch }}
           labels: |
             org.opencontainers.image.source=${{ github.repositoryUrl }}
             org.opencontainers.image.revision=${{ github.sha }}
