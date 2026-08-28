@@ -13,7 +13,7 @@ authors = [{ name = "Cinema Collections Contributors" }]
 dependencies = []
 
 [tool.hatch.build.targets.wheel]
-packages = ["cinema_collections_worker"]
+packages = ["app/src/cinema_collections_worker"]
 
 [dependency-groups]
 dev = ["pytest>=8.3", "pytest-asyncio>=0.24", "ruff>=0.8", "pyright>=1.1.390", "openapi-spec-validator>=0.7.2"]
@@ -22,6 +22,7 @@ home-assistant = ["homeassistant>=2024.1"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = [".", "app/src"]
 markers = [
   "worker: tests for the Cinema Collections worker",
   "integration: tests for the Home Assistant integration",
