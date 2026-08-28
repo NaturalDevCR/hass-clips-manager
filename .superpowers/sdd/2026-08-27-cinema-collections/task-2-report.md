@@ -41,6 +41,29 @@ exit 0
 
 Review-fix commit: `11b8d86c8ce53e674aecef36d8e7e77fe59f2d06`
 
+## Round 2 review fix
+
+- Added `openapi-spec-validator>=0.7.2` to the `dev` dependency group.
+- Contract tests now call the maintained validator's `validate()` API against
+  the loaded OpenAPI document, while retaining the typed-list and focused
+  contract assertions.
+
+### Round 2 verification
+
+```text
+.venv/bin/pytest tests/contract -v
+7 passed in 0.11s
+
+.venv/bin/ruff check tests/contract
+All checks passed!
+
+.venv/bin/python -m json.tool contract/openapi-v1.yaml
+exit 0
+
+git diff --check
+exit 0
+```
+
 ## Commit
 
 `feat: define worker API v1 contract` (`65f5acbf05b902babb0db2b9dba44c21fdd786dd`)

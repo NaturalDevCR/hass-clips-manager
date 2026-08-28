@@ -3,6 +3,8 @@
 import json
 from pathlib import Path
 
+from openapi_spec_validator import validate
+
 SCHEMA_PATH = Path(__file__).parents[2] / "contract" / "openapi-v1.yaml"
 
 EXPECTED_ROUTES = {
@@ -91,6 +93,7 @@ def assert_valid_openapi_structure(schema: dict) -> None:
 def test_openapi_document_has_versioned_routes_and_bearer_auth() -> None:
     schema = load_schema()
 
+    validate(schema)
     assert_valid_openapi_structure(schema)
     assert schema["openapi"].startswith("3.")
     assert schema["info"]["version"] == "1.0.0"
