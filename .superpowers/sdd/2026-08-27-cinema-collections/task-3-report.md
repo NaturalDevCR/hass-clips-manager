@@ -51,3 +51,15 @@ safe path/ID/filename validation.
 ## Commit
 
 `feat(worker): add validated settings and paths`
+
+## Round 1 follow-up
+
+- Added a Pydantic validator for `ClipRecord.collection_id`, matching the
+  existing `CollectionRef.id` collection-ID enforcement.
+- Added explicit filename tests for empty names, traversal components, and
+  slash/backslash path components.
+- `.venv/bin/pytest tests/worker/test_settings.py tests/worker/test_paths.py -v`:
+  **16 passed**.
+- `.venv/bin/ruff check app/src`: **All checks passed**.
+- `.venv/bin/pyright app/src/cinema_collections_worker`: **0 errors, 0 warnings**.
+- `git diff --check`: passed.

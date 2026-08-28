@@ -23,6 +23,12 @@ def test_rejects_unsafe_relative_paths(tmp_path: Path, value: str) -> None:
         resolver.resolve("source", value)
 
 
+@pytest.mark.parametrize("value", ["", ".", "..", "nested/clip.mp4", "nested\\clip.mp4"])
+def test_rejects_invalid_filename(value: str) -> None:
+    with pytest.raises(PathSafetyError):
+        validate_filename(value)
+
+
 def test_rejects_control_character_filename() -> None:
     with pytest.raises(PathSafetyError):
         validate_filename("clip\u0000.mp4")

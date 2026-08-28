@@ -46,3 +46,8 @@ class ClipRecord(BaseModel):
     output_available: bool = False
     metadata: dict[str, Any] = Field(default_factory=dict)
     updated_at: datetime | None = None
+
+    @field_validator("collection_id")
+    @classmethod
+    def validate_collection(cls, value: str) -> str:
+        return validate_collection_id(value)
