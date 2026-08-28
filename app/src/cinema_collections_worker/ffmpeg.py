@@ -218,7 +218,7 @@ class FfmpegCommandBuilder:
         loudnorm = self._loudnorm(profile, measured_loudness)
         if loudnorm is None:
             raise ValueError("final normalization requires two-pass loudness")
-        return [
+        command = [
             self.executable,
             "-hide_banner",
             "-nostdin",
@@ -235,5 +235,8 @@ class FfmpegCommandBuilder:
             profile.audio.codec,
             "-b:a",
             f"{profile.audio.bitrate_kbps}k",
-            str(job.temporary_output_path),
         ]
+        if profile.video.fast_start and profile.output.container == "mp4":
+            command.extend(["-movflags", "+faststart"])
+        command.append(str(job.temporary_output_path))
+        return command

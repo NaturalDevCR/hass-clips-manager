@@ -500,28 +500,34 @@ class JobWorker:
                         retry=retry,
                     )
                     return JobRunResult(job=finished, retry_scheduled=retry)
-                analysis = self.command_builder.build_final_loudness_analysis(
-                    runtime_job, composed_mix
-                )
-                analysis_ok, analysis_cancelled, analysis_output = self._run_process(
-                    runtime_job, analysis, timeout
-                )
-                if analysis_cancelled:
-                    finished = self._finish(job, JobState.CANCELLED, "cancelled")
-                    return JobRunResult(job=finished)
-                measured_loudness = self._parse_loudnorm(analysis_output)
-                if not analysis_ok or measured_loudness is None:
-                    retry = job.attempt < job.max_attempts
-                    finished = self._finish(
-                        job, JobState.FAILED, "final-mix loudness analysis failed", retry=retry
+                if not profile.loudness.final_mix_normalization:
+                    runtime_job = composed_job
+                    successful, cancelled, output = True, False, composition_output
+                    encode_command = None
+                else:
+                    analysis = self.command_builder.build_final_loudness_analysis(
+                        runtime_job, composed_mix
                     )
-                    return JobRunResult(job=finished, retry_scheduled=retry)
-                encode_command = self.command_builder.build_final_normalization(
-                    runtime_job, composed_mix, measured_loudness
-                )
+                    analysis_ok, analysis_cancelled, analysis_output = self._run_process(
+                        runtime_job, analysis, timeout
+                    )
+                    if analysis_cancelled:
+                        finished = self._finish(job, JobState.CANCELLED, "cancelled")
+                        return JobRunResult(job=finished)
+                    measured_loudness = self._parse_loudnorm(analysis_output)
+                    if not analysis_ok or measured_loudness is None:
+                        retry = job.attempt < job.max_attempts
+                        finished = self._finish(
+                            job, JobState.FAILED, "final-mix loudness analysis failed", retry=retry
+                        )
+                        return JobRunResult(job=finished, retry_scheduled=retry)
+                    encode_command = self.command_builder.build_final_normalization(
+                        runtime_job, composed_mix, measured_loudness
+                    )
             else:
                 encode_command = self.command_builder.build(runtime_job)
-            successful, cancelled, output = self._run_process(runtime_job, encode_command, timeout)
+            if encode_command is not None:
+                successful, cancelled, output = self._run_process(runtime_job, encode_command, timeout)
             parsed = self._parse_progress(output, job.duration_seconds)
             if parsed is None:
                 job = job.model_copy(
