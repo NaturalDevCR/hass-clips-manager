@@ -50,7 +50,7 @@ def test_health_reports_compatible_worker_versions_and_request_id(tmp_path: Path
     assert response.json() == {
         "status": "ok",
         "component": "cinema-collections-worker",
-        "worker_version": "1.2.0",
+        "worker_version": "1.3.0",
         "api_version": "1.0.0",
         "min_client_version": "1.0.0",
         "max_client_version": "1.x",
