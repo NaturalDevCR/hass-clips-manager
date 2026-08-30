@@ -556,7 +556,7 @@ class JobWorker:
             JobState.CANCELLED: JobStage.CANCELLED,
             JobState.FAILED: JobStage.FAILED,
         }[state]
-        return self.queue.update(
+        updated = self.queue.update(
             job.model_copy(
                 update={
                     "state": state,
@@ -569,9 +569,29 @@ class JobWorker:
                 }
             )
         )
+        if state is JobState.FAILED and job.kind == "compile":
+            self._record_clip_failure(job, safe_error)
+        return updated
 
     def _safe_message(self, value: object) -> str:
         return sanitize_message(value, roots=self.resolver.roots.values(), limit=1000)
+
+    def _record_clip_failure(self, job: JobRecord, error: str | None) -> None:
+        """Persist a bounded, already-sanitized failure reason on a failed clip."""
+        if error is None:
+            return
+        row = self.db.connection.execute(
+            "SELECT metadata FROM clips WHERE id=?", (job.clip_id,)
+        ).fetchone()
+        if row is None:
+            return
+        metadata = json.loads(str(row["metadata"]) or "{}")
+        metadata["failed_reason"] = error[:500]
+        with self.db.transaction():
+            self.db.connection.execute(
+                "UPDATE clips SET metadata=?, updated_at=? WHERE id=?",
+                (json.dumps(metadata, sort_keys=True), _now().isoformat(), job.clip_id),
+            )
 
     def _record_log(self, level: str, message: object, job_id: str | None = None) -> None:
         safe = self._safe_message(message)

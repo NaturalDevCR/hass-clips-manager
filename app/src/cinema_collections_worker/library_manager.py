@@ -364,6 +364,37 @@ class LibraryManager:
             path.name for path in root.iterdir() if path.is_file() and not path.is_symlink()
         )
 
+    def _profiles_referencing_asset(self, filename: str) -> list[str]:
+        """Return the IDs of profiles whose intro/outro reference this asset."""
+        referencing: list[str] = []
+        rows = self.db.connection.execute("SELECT id, settings FROM profiles").fetchall()
+        for row in rows:
+            settings = json.loads(row["settings"] or "{}")
+            if (
+                settings.get("intro_reference") == filename
+                or settings.get("outro_reference") == filename
+            ):
+                referencing.append(str(row["id"]))
+        return referencing
+
+    def delete_asset(self, filename: str) -> AuditEvent:
+        """Remove one stored asset unless a stored profile still references it."""
+        name = validate_filename(filename)
+        destination = self.resolver.resolve(RootKey.ASSETS.value, name)
+        if destination.is_symlink() or not destination.is_file():
+            raise ValueError("asset file does not exist")
+        referencing = self._profiles_referencing_asset(name)
+        if referencing:
+            if len(referencing) == 1:
+                message = f"asset is still referenced by profile '{referencing[0]}'"
+            else:
+                message = "asset is still referenced by profiles: " + ", ".join(
+                    f"'{profile_id}'" for profile_id in sorted(referencing)
+                )
+            raise ValueError(message)
+        destination.unlink()
+        return self._audit("library.asset_deleted", name, {"filename": name})
+
     def create_collection_directory(self, collection_id: str, relative_path: str) -> AuditEvent:
         """Create one approved subdirectory inside a configured collection root."""
 

@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from cinema_collections_worker.api import create_app
@@ -97,6 +98,8 @@ def test_manager_page_only_uses_ingress_safe_relative_action_urls(tmp_path: Path
     assert "/manager/trash" not in html
     assert "/manager/assets" not in html
     assert "/manager/collections" not in html
+    assert "/manager/logs" not in html
+    assert "/manager/jobs" not in html
     assert "`manager/upload?collection_id=" in html
     assert "`manager/clips/${id}/${action}`" in html
     assert "`manager/clips/${id}/delete-confirmation?target=${target}`" in html
@@ -108,6 +111,9 @@ def test_manager_page_only_uses_ingress_safe_relative_action_urls(tmp_path: Path
     assert "`manager/trash/${id}/restore`" in html
     assert "'manager/upload-asset'" in html
     assert "'manager/assets'" in html
+    assert "`manager/assets/${encodeURIComponent(name)}/delete`" in html
+    assert "'manager/logs'" in html
+    assert "'manager/jobs'" in html
 
 
 def test_manager_page_supports_multi_file_upload_with_cache_busted_stylesheet(
@@ -285,3 +291,250 @@ def test_manager_routes_complete_exact_clip_lifecycle(tmp_path: Path) -> None:
 
     assert deleted.status_code == 200
     assert deleted.json()["action_type"] == "library.permanently_deleted"
+
+
+def test_manager_logs_route_requires_auth_and_returns_written_entries(tmp_path: Path) -> None:
+    client = TestClient(_app(tmp_path))
+
+    assert client.get("/manager/logs").status_code == 401
+
+    csrf = _manager_session(client)
+    assert csrf
+    assert client.get("/manager/logs").json() == []
+
+    with client.app.state.database.connection:
+        client.app.state.database.connection.execute(
+            "INSERT INTO worker_logs(timestamp,level,message,job_id) VALUES(?,?,?,?)",
+            ("2026-01-01T00:00:00+00:00", "error", "boom", "job-1"),
+        )
+
+    body = client.get("/manager/logs").json()
+
+    assert body == [
+        {
+            "timestamp": "2026-01-01T00:00:00+00:00",
+            "level": "error",
+            "message": "boom",
+            "job_id": "job-1",
+        }
+    ]
+
+
+def test_manager_logs_route_is_capped_at_200_entries_newest_first(tmp_path: Path) -> None:
+    client = TestClient(_app(tmp_path))
+    _manager_session(client)
+    with client.app.state.database.connection:
+        for index in range(250):
+            client.app.state.database.connection.execute(
+                "INSERT INTO worker_logs(timestamp,level,message,job_id) VALUES(?,?,?,?)",
+                (f"2026-01-01T00:00:{index:02d}+00:00", "info", f"message-{index}", None),
+            )
+
+    body = client.get("/manager/logs").json()
+
+    assert len(body) == 200
+    assert body[0]["message"] == "message-249"
+    assert body[-1]["message"] == "message-50"
+
+
+def test_manager_jobs_route_lists_recent_jobs_and_single_job_route_still_works(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(_app(tmp_path))
+    _seed_collection(client)
+    csrf = _manager_session(client)
+    headers = {"X-CSRF-Token": csrf}
+    job_id = client.post("/manager/scan?collection_id=films", headers=headers).json()["details"][
+        "job_id"
+    ]
+
+    jobs = client.get("/manager/jobs")
+
+    assert jobs.status_code == 200
+    assert jobs.json()[0]["id"] == job_id
+    assert jobs.json()[0]["kind"] == "scan"
+    assert set(jobs.json()[0]) == {"id", "kind", "state", "created_at", "finished_at", "error"}
+
+    single = client.get(f"/manager/jobs/{job_id}")
+
+    assert single.status_code == 200
+    assert single.json()["id"] == job_id
+
+
+def test_manager_asset_delete_round_trip_and_requires_csrf(tmp_path: Path) -> None:
+    client = TestClient(_app(tmp_path))
+    csrf = _manager_session(client)
+    headers = {"X-CSRF-Token": csrf}
+    uploaded = client.post(
+        "/manager/upload-asset",
+        headers={**headers, "X-Filename": "intro.mp4"},
+        content=b"clip",
+    )
+    assert uploaded.status_code == 201
+    assert client.get("/manager/assets").json() == ["intro.mp4"]
+
+    deleted = client.post("/manager/assets/intro.mp4/delete", headers=headers)
+
+    assert deleted.status_code == 200
+    assert deleted.json()["action_type"] == "library.asset_deleted"
+    assert deleted.json()["details"]["filename"] == "intro.mp4"
+    assert client.get("/manager/assets").json() == []
+
+    client.post(
+        "/manager/upload-asset",
+        headers={**headers, "X-Filename": "again.mp4"},
+        content=b"clip",
+    )
+    rejected = client.post("/manager/assets/again.mp4/delete")
+
+    assert rejected.status_code == 403
+
+
+def test_manager_asset_delete_surfaces_profile_reference_refusal(tmp_path: Path) -> None:
+    client = TestClient(_app(tmp_path))
+    _seed_collection(client)
+    csrf = _manager_session(client)
+    headers = {"X-CSRF-Token": csrf}
+    client.post(
+        "/manager/upload-asset",
+        headers={**headers, "X-Filename": "intro.mp4"},
+        content=b"clip",
+    )
+    profile = client.get("/api/v1/profiles", headers={"Authorization": f"Bearer {_TOKEN}"}).json()[
+        "items"
+    ][0]
+    settings = profile["settings"]
+    settings["intro_reference"] = "intro.mp4"
+    with client.app.state.database.connection:
+        client.app.state.database.connection.execute(
+            "UPDATE profiles SET settings=? WHERE id=?",
+            (json.dumps(settings, sort_keys=True), profile["id"]),
+        )
+
+    refused = client.post("/manager/assets/intro.mp4/delete", headers=headers)
+
+    assert refused.status_code == 422
+    assert "still referenced" in refused.json()["message"]
+    assert profile["id"] in refused.json()["message"]
+    assert client.get("/manager/assets").json() == ["intro.mp4"]
+
+
+def test_manager_page_contains_worker_log_and_recent_jobs_sections(tmp_path: Path) -> None:
+    client = TestClient(_app(tmp_path))
+    _manager_session(client)
+
+    html = client.get("/", headers={"X-Ingress-Path": "/api/hassio_ingress/session"}).text
+
+    assert 'id="log-table"' in html
+    assert 'id="log-refresh"' in html
+    assert 'id="jobs-table"' in html
+    assert 'id="jobs-refresh"' in html
+    assert "<th>Output</th>" in html
+    assert "<th>Duration</th>" in html
+    assert "<th>Tags</th>" in html
+
+
+def test_failed_clip_row_renders_failure_reason(tmp_path: Path) -> None:
+    client = TestClient(_app(tmp_path))
+    _seed_collection(client)
+    _manager_session(client)
+    with client.app.state.database.connection:
+        client.app.state.database.connection.execute(
+            "INSERT INTO clips(id,collection_id,state,relative_source_path,relative_output_path,"
+            "duration_seconds,output_available,metadata,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
+            (
+                "11111111-1111-1111-1111-111111111111",
+                "films",
+                "failed",
+                "films/broken.mp4",
+                "films/11111111-1111-1111-1111-111111111111.mp4",
+                0.0,
+                0,
+                '{"failed_reason": "loudness analysis failed"}',
+                "2026-01-01T00:00:00+00:00",
+            ),
+        )
+
+    html = client.get("/", headers={"X-Ingress-Path": "/api/hassio_ingress/session"}).text
+
+    assert 'class="clip-failure"' in html
+    assert "loudness analysis failed" in html
+
+
+def test_failed_compile_persists_sanitized_clip_failure_reason(tmp_path: Path) -> None:
+    from cinema_collections_worker.jobs import CompileRequest, JobWorker
+    from cinema_collections_worker.profile_validation import ProcessingProfile
+
+    client = TestClient(_app(tmp_path))
+    _seed_collection(client)
+    csrf = _manager_session(client)
+    uploaded = client.post(
+        "/manager/upload?collection_id=films",
+        headers={"X-CSRF-Token": csrf, "X-Filename": "clip.mp4"},
+        content=b"clip",
+    )
+    assert uploaded.status_code == 201
+    source_root = str(client.app.state.resolver.roots[RootKey.SOURCE])
+    disabled = ProcessingProfile(loudness={"mode": "disabled"}).model_dump(mode="json")
+    with client.app.state.database.connection:
+        client.app.state.database.connection.execute(
+            "UPDATE profiles SET settings=? WHERE id='compatibility-4k-loudness'",
+            (json.dumps(disabled, sort_keys=True),),
+        )
+        client.app.state.database.connection.execute("UPDATE clips SET state='failed'")
+
+    class _FailedProcess:
+        pid = 31337
+        returncode = 1
+
+        def communicate(self, timeout):
+            return ("", f"ffmpeg exploded: bearer SECRET at {source_root}")
+
+    job = client.app.state.jobs.enqueue_compile(
+        CompileRequest(collection_id="films", strategy="compile_stale_only", max_attempts=1)
+    )[0]
+    worker = JobWorker(
+        client.app.state.database,
+        client.app.state.resolver,
+        process_factory=lambda command, **_kwargs: _FailedProcess(),
+    )
+    result = worker.run_once()
+
+    assert result is not None and result.job.state.value == "failed"
+    row = client.app.state.database.connection.execute(
+        "SELECT metadata FROM clips WHERE id=?", (job.clip_id,)
+    ).fetchone()
+    metadata = json.loads(row["metadata"])
+    assert "failed_reason" in metadata
+    assert "ffmpeg exploded" in metadata["failed_reason"]
+    assert "Bearer [REDACTED]" in metadata["failed_reason"]
+    assert "SECRET" not in metadata["failed_reason"]
+    assert "[WORKER_ROOT]" in metadata["failed_reason"]
+
+
+def test_manager_page_renders_output_duration_and_tags_columns(tmp_path: Path) -> None:
+    client = TestClient(_app(tmp_path))
+    _seed_collection(client)
+    _manager_session(client)
+    with client.app.state.database.connection:
+        client.app.state.database.connection.execute(
+            "INSERT INTO clips(id,collection_id,state,relative_source_path,relative_output_path,"
+            "duration_seconds,output_available,metadata,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
+            (
+                "22222222-2222-2222-2222-222222222222",
+                "films",
+                "ready",
+                "films/ready.mp4",
+                "films/22222222-2222-2222-2222-222222222222.mp4",
+                125.5,
+                1,
+                '{"tags": ["night", "featured"]}',
+                "2026-01-01T00:00:00+00:00",
+            ),
+        )
+
+    html = client.get("/", headers={"X-Ingress-Path": "/api/hassio_ingress/session"}).text
+
+    assert "films/22222222-2222-2222-2222-222222222222.mp4" in html
+    assert "2:05" in html
+    assert "night, featured" in html

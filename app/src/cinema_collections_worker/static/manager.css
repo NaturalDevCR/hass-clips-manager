@@ -272,6 +272,16 @@ form.row-form textarea { resize: vertical; }
   font-size: 0.9rem;
 }
 
+#asset-list li {
+  margin: 0.35rem 0;
+}
+
+#asset-list li button {
+  margin-left: 0.5rem;
+  padding: 0.2rem 0.6rem;
+  font-size: 0.8rem;
+}
+
 #asset-list code {
   font-size: 0.82rem;
   color: var(--text-muted);
@@ -281,4 +291,27 @@ form.row-form textarea { resize: vertical; }
   font-size: 0.85rem;
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
+}
+
+.clip-failure {
+  margin-top: 0.25rem;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+tr.log-error td {
+  color: var(--danger);
+}
+
+tr.log-error td:first-child,
+tr.log-error td:nth-child(2) {
+  color: var(--text-muted);
+}
+
+tr.is-failed td:last-child {
+  color: var(--danger);
+}
+
+.section-refresh {
+  margin-top: 0.75rem;
 }

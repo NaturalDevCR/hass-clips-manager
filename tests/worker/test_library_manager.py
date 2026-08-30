@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from io import BytesIO
 from pathlib import Path
 
@@ -8,6 +9,7 @@ from cinema_collections_worker.database import Database
 from cinema_collections_worker.domain import CollectionCreate, ProfileCreate
 from cinema_collections_worker.library_manager import DeleteTarget, LibraryManager, TrashTarget
 from cinema_collections_worker.paths import RootKey, SafePathResolver
+from cinema_collections_worker.profile_validation import ProcessingProfile
 from cinema_collections_worker.repositories import CollectionRepository, ProfileRepository
 from fastapi import UploadFile
 
@@ -273,6 +275,78 @@ def test_import_and_list_assets_are_flat_in_the_assets_root(tmp_path: Path) -> N
     assert manager.list_assets() == ["intro.mp4", "outro.mp4"]
     with pytest.raises(ValueError, match="already exists"):
         manager.import_asset(_upload("intro.mp4", b"clip"))
+
+
+def _profile_settings(reference_field: str, filename: str) -> str:
+    settings = ProcessingProfile().model_dump(mode="json")
+    settings[reference_field] = filename
+    return json.dumps(settings, sort_keys=True)
+
+
+def test_delete_asset_removes_file_and_audits_it(tmp_path: Path) -> None:
+    db, manager, _source, _compiled = _manager(tmp_path)
+    assets = manager.resolver.roots[RootKey.ASSETS]
+    manager.import_asset(_upload("intro.mp4", b"clip"))
+
+    event = manager.delete_asset("intro.mp4")
+
+    assert event.action_type == "library.asset_deleted"
+    assert event.details["filename"] == "intro.mp4"
+    assert manager.list_assets() == []
+    assert not (assets / "intro.mp4").exists()
+    assert (
+        db.connection.execute(
+            "SELECT count(*) FROM audit_events WHERE action_type='library.asset_deleted'"
+        ).fetchone()[0]
+        == 1
+    )
+
+
+def test_delete_asset_refuses_missing_file_and_rejects_paths(tmp_path: Path) -> None:
+    _db, manager, _source, _compiled = _manager(tmp_path)
+
+    with pytest.raises(ValueError, match="does not exist"):
+        manager.delete_asset("missing.mp4")
+    with pytest.raises(ValueError, match="path component"):
+        manager.delete_asset("nested/intro.mp4")
+    with pytest.raises(ValueError, match="path component"):
+        manager.delete_asset("../intro.mp4")
+
+    assert manager.list_assets() == []
+
+
+def test_delete_asset_refuses_asset_referenced_by_profile_intro_reference(
+    tmp_path: Path,
+) -> None:
+    db, manager, _source, _compiled = _manager(tmp_path)
+    manager.import_asset(_upload("intro.mp4", b"clip"))
+    with db.connection:
+        db.connection.execute(
+            "UPDATE profiles SET settings=? WHERE id='default'",
+            (_profile_settings("intro_reference", "intro.mp4"),),
+        )
+
+    with pytest.raises(ValueError, match="profile 'default'"):
+        manager.delete_asset("intro.mp4")
+
+    assert manager.list_assets() == ["intro.mp4"]
+
+
+def test_delete_asset_refuses_asset_referenced_by_profile_outro_reference(
+    tmp_path: Path,
+) -> None:
+    db, manager, _source, _compiled = _manager(tmp_path)
+    manager.import_asset(_upload("outro.mp4", b"clip"))
+    with db.connection:
+        db.connection.execute(
+            "UPDATE profiles SET settings=? WHERE id='default'",
+            (_profile_settings("outro_reference", "outro.mp4"),),
+        )
+
+    with pytest.raises(ValueError, match="profile 'default'"):
+        manager.delete_asset("outro.mp4")
+
+    assert manager.list_assets() == ["outro.mp4"]
 
 
 @pytest.mark.parametrize(

@@ -63,7 +63,7 @@
         <ul id="asset-list"></ul>
       </section>
       <table>
-        <thead><tr><th>Collection</th><th>Source</th><th>State</th><th>Clip ID</th><th>Actions</th></tr></thead>
+        <thead><tr><th>Collection</th><th>Source</th><th>State</th><th>Clip ID</th><th>Output</th><th>Duration</th><th>Tags</th><th>Actions</th></tr></thead>
         <tbody>{{ clip_rows }}</tbody>
       </table>
       <section>
@@ -72,6 +72,24 @@
           <thead><tr><th>Clip ID</th><th>Target</th><th>Trashed at</th><th></th></tr></thead>
           <tbody><tr><td colspan="4">Trash is empty.</td></tr></tbody>
         </table>
+      </section>
+      <section>
+        <h2>Recent jobs</h2>
+        <table id="jobs-table">
+          <thead><tr><th>Job</th><th>Kind</th><th>State</th><th>Created</th><th>Finished</th><th>Error</th></tr></thead>
+          <tbody><tr><td colspan="6">No jobs yet.</td></tr></tbody>
+        </table>
+        <p class="field-hint">The most recent 50 jobs, newest first.</p>
+        <button type="button" id="jobs-refresh" class="section-refresh">Refresh</button>
+      </section>
+      <section>
+        <h2>Worker log</h2>
+        <table id="log-table">
+          <thead><tr><th>Timestamp</th><th>Level</th><th>Message</th></tr></thead>
+          <tbody><tr><td colspan="3">No log entries yet.</td></tr></tbody>
+        </table>
+        <p class="field-hint">The most recent 200 entries, newest first.</p>
+        <button type="button" id="log-refresh" class="section-refresh">Refresh</button>
       </section>
     </main>
     <script>
@@ -405,10 +423,84 @@
           const code = document.createElement('code');
           code.textContent = name;
           item.appendChild(code);
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.textContent = 'Delete';
+          button.addEventListener('click', async () => {
+            if (!window.confirm(`Permanently delete asset ${name}?`)) return;
+            const assetResult = document.getElementById('asset-result');
+            assetResult.classList.remove('is-error');
+            try {
+              await act(`manager/assets/${encodeURIComponent(name)}/delete`, {method: 'POST'});
+              assetResult.textContent = `Deleted ${name}.`;
+              refreshAssets();
+            } catch (error) {
+              assetResult.classList.add('is-error');
+              assetResult.textContent = error.message;
+            }
+          });
+          item.appendChild(button);
           list.appendChild(item);
         });
       }
       refreshAssets();
+
+      async function refreshJobs() {
+        const tbody = document.querySelector('#jobs-table tbody');
+        let jobs;
+        try {
+          jobs = await act('manager/jobs');
+        } catch {
+          tbody.innerHTML = '<tr><td colspan="6">Recent jobs unavailable.</td></tr>';
+          return;
+        }
+        if (!jobs || jobs.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="6">No jobs yet.</td></tr>';
+          return;
+        }
+        tbody.textContent = '';
+        jobs.forEach(job => {
+          const row = document.createElement('tr');
+          [job.id, job.kind, job.state, job.created_at || '', job.finished_at || '', job.error || '']
+            .forEach(value => {
+              const cell = document.createElement('td');
+              cell.textContent = value;
+              row.appendChild(cell);
+            });
+          if (job.state === 'failed') row.classList.add('is-failed');
+          tbody.appendChild(row);
+        });
+      }
+      document.getElementById('jobs-refresh').addEventListener('click', refreshJobs);
+      refreshJobs();
+
+      async function refreshLogs() {
+        const tbody = document.querySelector('#log-table tbody');
+        let entries;
+        try {
+          entries = await act('manager/logs');
+        } catch {
+          tbody.innerHTML = '<tr><td colspan="3">Worker log unavailable.</td></tr>';
+          return;
+        }
+        if (!entries || entries.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="3">No log entries yet.</td></tr>';
+          return;
+        }
+        tbody.textContent = '';
+        entries.forEach(entry => {
+          const row = document.createElement('tr');
+          [entry.timestamp, entry.level, entry.message].forEach(value => {
+            const cell = document.createElement('td');
+            cell.textContent = value;
+            row.appendChild(cell);
+          });
+          if (entry.level === 'error') row.classList.add('log-error');
+          tbody.appendChild(row);
+        });
+      }
+      document.getElementById('log-refresh').addEventListener('click', refreshLogs);
+      refreshLogs();
 
       document.getElementById('asset-upload-form').addEventListener('submit', async event => {
         event.preventDefault();

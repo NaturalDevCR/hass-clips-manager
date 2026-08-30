@@ -103,11 +103,26 @@ def _require_action(request: Request, csrf: str | None) -> LibraryManager:
     return request.app.state.library_manager
 
 
+def _format_duration(seconds: float) -> str:
+    total = int(seconds)
+    minutes, remainder = divmod(total, 60)
+    return f"{minutes}:{remainder:02d}"
+
+
 def _render_clip_row(row: Any) -> str:
     metadata = json.loads(row["metadata"] or "{}")
     tags = ", ".join(metadata.get("tags") or [])
     notes = str(metadata.get("notes") or "")
+    state = str(row["state"])
     output_value = row["relative_output_path"] or ""
+    output_cell = (
+        html.escape(str(output_value), quote=True) if bool(row["output_available"]) else "—"
+    )
+    duration_seconds = float(row["duration_seconds"] or 0)
+    duration_cell = _format_duration(duration_seconds) if duration_seconds > 0 else "—"
+    failure = ""
+    if state in {"failed", "invalid"} and metadata.get("failed_reason"):
+        failure = f'<div class="clip-failure">{html.escape(str(metadata["failed_reason"]))}</div>'
     # An unavailable output cannot be trashed or deleted, so disable those
     # options in both target selectors.
     target_option = (
@@ -118,7 +133,8 @@ def _render_clip_row(row: Any) -> str:
     )
     return (
         '<tr data-clip-id="{id}" data-output-path="{output}">'
-        "<td>{collection}</td><td>{source}</td><td>{state}</td><td><code>{id}</code></td>"
+        "<td>{collection}</td><td>{source}{failure}</td><td>{state}</td><td><code>{id}</code></td>"
+        "<td>{output_cell}</td><td>{duration_cell}</td><td>{tags}</td>"
         '<td class="actions">'
         '<button data-action="scan">Scan</button> '
         '<button data-action="recompile">Recompile</button> '
@@ -139,8 +155,11 @@ def _render_clip_row(row: Any) -> str:
             id=html.escape(str(row["id"]), quote=True),
             collection=html.escape(str(row["collection_id"])),
             source=html.escape(str(row["relative_source_path"]), quote=True),
-            state=html.escape(str(row["state"])),
+            failure=failure,
+            state=html.escape(state),
             output=html.escape(str(output_value), quote=True),
+            output_cell=output_cell,
+            duration_cell=duration_cell,
             tags=html.escape(tags, quote=True),
             notes=html.escape(notes),
             targets=target_option,
@@ -152,12 +171,12 @@ def _render_manager(request: Request, csrf: str) -> str:
     database = request.app.state.database
     rows = database.connection.execute(
         "SELECT id, collection_id, relative_source_path, relative_output_path, state, "
-        "output_available, metadata FROM clips "
+        "output_available, duration_seconds, metadata FROM clips "
         "WHERE state <> 'deleted' ORDER BY updated_at DESC, id DESC"
     ).fetchall()
     clip_rows = (
         "".join(_render_clip_row(row) for row in rows)
-        or '<tr><td colspan="5">No catalogued clips yet.</td></tr>'
+        or '<tr><td colspan="8">No catalogued clips yet.</td></tr>'
     )
     template = (
         Path(__file__).with_name("templates").joinpath("manager.html").read_text(encoding="utf-8")
@@ -251,6 +270,57 @@ def install_manager_routes(app: FastAPI, settings: WorkerSettings) -> None:
         if not _initial_auth_is_valid(request, settings):
             raise HTTPException(status_code=401, detail="Library Manager authentication required")
         return request.app.state.library_manager.list_assets()
+
+    @app.post("/manager/assets/{filename}/delete", include_in_schema=False)
+    def delete_asset(
+        request: Request,
+        filename: str,
+        csrf: Annotated[str | None, Header(alias="X-CSRF-Token")] = None,
+    ) -> Any:
+        manager = _require_action(request, csrf)
+        try:
+            return _dump(manager.delete_asset(filename))
+        except ValueError as exc:
+            # Surface the refusal reason (e.g. a profile still references the
+            # asset) verbatim so the UI can tell the user what to change first.
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get("/manager/logs", include_in_schema=False)
+    def list_logs(request: Request) -> list[dict[str, Any]]:
+        if not _initial_auth_is_valid(request, settings):
+            raise HTTPException(status_code=401, detail="Library Manager authentication required")
+        rows = request.app.state.database.connection.execute(
+            "SELECT timestamp,level,message,job_id FROM worker_logs ORDER BY id DESC LIMIT 200"
+        ).fetchall()
+        return [
+            {
+                "timestamp": row["timestamp"],
+                "level": str(row["level"]),
+                "message": str(row["message"]),
+                "job_id": row["job_id"],
+            }
+            for row in rows
+        ]
+
+    @app.get("/manager/jobs", include_in_schema=False)
+    def list_manager_jobs(request: Request) -> list[dict[str, Any]]:
+        if not _initial_auth_is_valid(request, settings):
+            raise HTTPException(status_code=401, detail="Library Manager authentication required")
+        rows = request.app.state.database.connection.execute(
+            "SELECT id,kind,state,created_at,finished_at,error FROM jobs "
+            "ORDER BY created_at DESC, id DESC LIMIT 50"
+        ).fetchall()
+        return [
+            {
+                "id": row["id"],
+                "kind": str(row["kind"]),
+                "state": str(row["state"]),
+                "created_at": row["created_at"],
+                "finished_at": row["finished_at"],
+                "error": row["error"],
+            }
+            for row in rows
+        ]
 
     @app.post(
         "/manager/collections/{collection_id}/directories",
