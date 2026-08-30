@@ -451,7 +451,13 @@ def create_app(settings: WorkerSettings) -> FastAPI:
         queue=queue,
         jobs=app.state.jobs,
     )
-    app.state.job_worker = JobWorker(database, resolver, queue=queue, catalog=app.state.catalog)
+    app.state.job_worker = JobWorker(
+        database,
+        resolver,
+        queue=queue,
+        catalog=app.state.catalog,
+        library_manager=app.state.library_manager,
+    )
     app.mount(
         "/static",
         StaticFiles(directory=Path(__file__).with_name("static")),
@@ -801,6 +807,16 @@ def create_app(settings: WorkerSettings) -> FastAPI:
             for row in rows
         ]
         return LogsPage.model_validate(_page(entries, page, page_size).model_dump())
+
+    @app.get(
+        "/api/v1/assets",
+        response_model=list[str],
+        dependencies=[Depends(require_bearer_token)],
+        responses=_UNAUTHORIZED_RESPONSE,
+        operation_id="listAssets",
+    )
+    def list_assets(request: Request) -> list[str]:
+        return app.state.library_manager.list_assets()
 
     @app.post(
         "/api/v1/cleanup-temporaries",

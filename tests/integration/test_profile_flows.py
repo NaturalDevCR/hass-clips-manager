@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from typing import Any
 
 import pytest
+from homeassistant.helpers.selector import SelectSelector
 
 from custom_components.cinema_collections.const import (
     CONF_ENDPOINT,
@@ -269,6 +270,7 @@ async def test_profile_flow_rejects_required_audio_with_silence_fallback(
 ) -> None:
     """The Worker forbids that combination, so the form must reject it locally."""
     entry = await _pair(hass, aioclient_mock, worker_health_payload)
+    aioclient_mock.get("http://worker.local/api/v1/assets", json=[])
 
     shown = await hass.config_entries.subentries.async_init(
         (entry.entry_id, SUBENTRY_PROFILE),
@@ -317,6 +319,7 @@ async def test_profile_flow_reconfigure_prefills_fields_from_stored_settings(
     subentry = next(
         item for item in entry.subentries.values() if item.subentry_type == SUBENTRY_PROFILE
     )
+    aioclient_mock.get("http://worker.local/api/v1/assets", json=[])
 
     shown = await hass.config_entries.subentries.async_init(
         (entry.entry_id, SUBENTRY_PROFILE),
@@ -369,6 +372,74 @@ async def test_profile_flow_optional_reference_values_are_preserved(
     assert settings["minimum_segment_duration_seconds"] == 5.0
 
 
+@pytest.mark.asyncio
+async def test_profile_form_offers_worker_assets_as_intro_outro_selects(
+    hass, aioclient_mock, worker_health_payload
+) -> None:
+    """Uploaded Worker assets become dropdown choices, with None still explicit."""
+    entry = await _pair(hass, aioclient_mock, worker_health_payload)
+    aioclient_mock.get(
+        "http://worker.local/api/v1/assets",
+        json=["intro.mp4", "outro.mp4"],
+    )
+
+    shown = await hass.config_entries.subentries.async_init(
+        (entry.entry_id, SUBENTRY_PROFILE),
+        context={"source": "user"},
+    )
+
+    assert shown["type"] == "form"
+    for field_name in ("intro_reference", "outro_reference"):
+        field = next(key for key in shown["data_schema"].schema if str(key) == field_name)
+        reference_selector = shown["data_schema"].schema[field]
+        assert isinstance(reference_selector, SelectSelector)
+        assert reference_selector.config["custom_value"] is True
+        assert reference_selector.config["options"] == [
+            {"value": "", "label": "None"},
+            {"value": "intro.mp4", "label": "intro.mp4"},
+            {"value": "outro.mp4", "label": "outro.mp4"},
+        ]
+
+
+@pytest.mark.asyncio
+async def test_profile_form_falls_back_to_free_text_when_assets_are_unreachable(
+    hass, aioclient_mock, worker_health_payload
+) -> None:
+    """A transient Worker outage must not block opening the profile form."""
+    entry = await _pair(hass, aioclient_mock, worker_health_payload)
+    aioclient_mock.get(
+        "http://worker.local/api/v1/assets",
+        exc=TimeoutError(),
+    )
+
+    shown = await hass.config_entries.subentries.async_init(
+        (entry.entry_id, SUBENTRY_PROFILE),
+        context={"source": "user"},
+    )
+
+    assert shown["type"] == "form"
+    for field_name in ("intro_reference", "outro_reference"):
+        field = next(key for key in shown["data_schema"].schema if str(key) == field_name)
+        assert shown["data_schema"].schema[field] is str
+
+
+@pytest.mark.asyncio
+async def test_profile_flow_selected_asset_filename_serializes_as_that_string(
+    hass, aioclient_mock, worker_health_payload
+) -> None:
+    """Choosing a dropdown filename carries it through unchanged; None stays null."""
+    await _create_profile(
+        hass,
+        aioclient_mock,
+        worker_health_payload,
+        profile_form(intro_reference="intro.mp4", outro_reference=""),
+    )
+
+    settings = _create_payload(aioclient_mock)["settings"]
+    assert settings["intro_reference"] == "intro.mp4"
+    assert settings["outro_reference"] is None
+
+
 def test_profile_schema_is_serializable_for_the_frontend() -> None:
     """The real HTTP layer serializes every flow schema with voluptuous_serialize
     before it ever reaches Python-level form-submission tests. A validator
@@ -384,10 +455,13 @@ def test_profile_schema_is_serializable_for_the_frontend() -> None:
     from custom_components.cinema_collections.subentries import _profile_schema
 
     for existing in (None, ProfileSubentryData(profile_id="4k", name="4K", settings={})):
-        fields = voluptuous_serialize.convert(
-            _profile_schema(existing), custom_serializer=cv.custom_serializer
-        )
-        assert {field["name"] for field in fields} >= {
-            "video_bitrate_kbps",
-            "minimum_segment_duration_seconds",
-        }
+        for assets in ((), ("intro.mp4", "outro.mp4")):
+            fields = voluptuous_serialize.convert(
+                _profile_schema(existing, assets), custom_serializer=cv.custom_serializer
+            )
+            assert {field["name"] for field in fields} >= {
+                "video_bitrate_kbps",
+                "minimum_segment_duration_seconds",
+                "intro_reference",
+                "outro_reference",
+            }

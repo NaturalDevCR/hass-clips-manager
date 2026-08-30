@@ -178,6 +178,13 @@ class WorkerApiClient:
                 )
             page += 1
 
+    async def async_list_assets(self) -> tuple[str, ...]:
+        """Return the Worker's uploaded intro/outro asset filenames."""
+        payload = await self._async_get_list("/assets")
+        if not all(isinstance(item, str) for item in payload):
+            raise WorkerApiProtocolError("Worker assets response did not match the API contract")
+        return tuple(payload)
+
     async def async_list_jobs(self) -> tuple[WorkerJob, ...]:
         """Return all public Worker jobs for safe integration observability."""
         page = 1
@@ -306,8 +313,34 @@ class WorkerApiClient:
 
         raise AssertionError("bounded Worker retry loop must return or raise")
 
+    async def _async_get_list(self, path: str) -> list[Any]:
+        """Request a JSON-array GET endpoint with the same bounded retries."""
+        for attempt in range(MAX_REQUEST_ATTEMPTS):
+            try:
+                return await self._async_get_list_once(path)
+            except (WorkerApiConnectionError, WorkerApiRetryableError):
+                if attempt == MAX_REQUEST_ATTEMPTS - 1:
+                    raise
+                await asyncio.sleep(RETRY_BACKOFF_SECONDS * (2**attempt))
+
+        raise AssertionError("bounded Worker retry loop must return or raise")
+
     async def _async_get_once(self, path: str) -> Mapping[str, Any]:
         """Perform one GET request; only GET operations are retried by this client."""
+        payload = await self._async_get_json_once(path)
+        if not isinstance(payload, Mapping):
+            raise WorkerApiProtocolError("Worker response must be a JSON object")
+        return cast(Mapping[str, Any], payload)
+
+    async def _async_get_list_once(self, path: str) -> list[Any]:
+        """Perform one GET request that must answer with a JSON array."""
+        payload = await self._async_get_json_once(path)
+        if not isinstance(payload, list):
+            raise WorkerApiProtocolError("Worker response must be a JSON array")
+        return cast(list[Any], payload)
+
+    async def _async_get_json_once(self, path: str) -> Any:
+        """Perform one GET request, mapping HTTP failures to safe client errors."""
         try:
             async with self._session.get(
                 f"{self._endpoint}{API_PREFIX}{path}",
@@ -324,15 +357,11 @@ class WorkerApiClient:
                     raise WorkerApiError(
                         f"Worker request failed with HTTP status {response.status}"
                     )
-                payload = await response.json(content_type=None)
+                return await response.json(content_type=None)
         except WorkerApiError:
             raise
         except (TimeoutError, ClientError, OSError) as error:
             raise WorkerApiConnectionError("Worker request could not be completed") from error
-
-        if not isinstance(payload, Mapping):
-            raise WorkerApiProtocolError("Worker response must be a JSON object")
-        return cast(Mapping[str, Any], payload)
 
     async def _async_mutate(
         self,

@@ -370,6 +370,9 @@ async def test_profile_subentry_flow_creates_and_reports_worker_validation(
         ) -> dict[str, object]:
             raise WorkerValidationError("Worker rejected the submitted configuration")
 
+        async def async_list_assets(self) -> tuple[str, ...]:
+            return ()
+
     import custom_components.cinema_collections.subentries as subentries
 
     monkeypatch.setattr(

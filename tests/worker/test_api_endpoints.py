@@ -3,12 +3,14 @@
 import json
 import time
 from datetime import UTC, datetime
+from io import BytesIO
 from pathlib import Path
 
 from cinema_collections_worker.api import create_app
 from cinema_collections_worker.paths import RootKey
 from cinema_collections_worker.profile_validation import ProcessingProfile
 from cinema_collections_worker.settings import WorkerSettings
+from fastapi import UploadFile
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
@@ -315,3 +317,16 @@ def test_lifespan_scan_persists_sanitized_status_and_logs(tmp_path: Path) -> Non
     assert logs["total"] >= 1
     rendered = json.dumps(logs)
     assert str(tmp_path) not in rendered
+
+
+def test_list_assets_is_bearer_authenticated_and_returns_library_assets(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+
+    assert client.get("/api/v1/assets").status_code == 401
+    assert client.get("/api/v1/assets", headers=_headers()).json() == []
+
+    client.app.state.library_manager.import_asset(
+        UploadFile(file=BytesIO(b"clip"), filename="intro.mp4")
+    )
+
+    assert client.get("/api/v1/assets", headers=_headers()).json() == ["intro.mp4"]

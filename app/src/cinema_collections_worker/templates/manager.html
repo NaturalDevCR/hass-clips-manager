@@ -18,6 +18,10 @@
           <label>Video(s) <input name="file" type="file" accept="video/*" multiple required></label>
           <button type="submit">Upload</button>
         </form>
+        <p class="field-hint">Large files are sent in chunks, so they pass through
+          reverse proxies that limit request size. To skip uploading entirely,
+          copy the files into the collection's source folder and use
+          "Scan for files already on disk" below instead.</p>
         <div id="upload-progress" class="upload-progress" hidden>
           <div class="upload-progress-bar"><div id="upload-progress-fill" class="upload-progress-fill"></div></div>
           <p id="upload-progress-label" class="upload-progress-label"></p>
@@ -112,29 +116,37 @@
         return body;
       }
 
-      // fetch() exposes no upload-progress event, so a single-file upload
-      // uses XHR directly to drive the progress bar.
-      function uploadWithProgress(url, file, onProgress) {
-        return new Promise((resolve, reject) => {
-          const xhr = new XMLHttpRequest();
-          xhr.open('POST', url);
-          xhr.setRequestHeader('X-CSRF-Token', window.managerCsrf);
-          xhr.setRequestHeader('X-Filename', file.name);
-          xhr.upload.addEventListener('progress', event => {
-            if (event.lengthComputable) onProgress(event.loaded / event.total);
-          });
-          xhr.addEventListener('load', () => {
-            let body = null;
-            try { body = xhr.responseText ? JSON.parse(xhr.responseText) : null; } catch { body = null; }
-            if (xhr.status >= 200 && xhr.status < 300) {
-              resolve(body);
-            } else {
-              reject(new Error((body && body.message) || `Request failed (HTTP ${xhr.status})`));
-            }
-          });
-          xhr.addEventListener('error', () => reject(new Error('Network error during upload')));
-          xhr.send(file);
+      // Files upload in fixed-size chunks so every request stays well below
+      // reverse-proxy request-body limits (e.g. Cloudflare's 100 MB). The
+      // server stages chunks and only publishes the file on finish.
+      const UPLOAD_CHUNK_BYTES = 8 * 1024 * 1024;
+
+      // Begin, send chunks, finish. onProgress receives the fraction of the
+      // file's bytes acknowledged by the server. A failed chunk aborts the
+      // upload so no staging file is left behind.
+      async function uploadChunked(kind, file, collection, onProgress) {
+        const params = new URLSearchParams({kind});
+        if (collection) params.set('collection_id', collection);
+        const begun = await act(`manager/uploads?${params}`, {
+          method: 'POST',
+          headers: {'X-Filename': file.name},
         });
+        const uploadId = begun.upload_id;
+        try {
+          for (let offset = 0; offset < file.size; offset += UPLOAD_CHUNK_BYTES) {
+            const chunk = file.slice(offset, offset + UPLOAD_CHUNK_BYTES);
+            await act(`manager/uploads/${uploadId}/chunk`, {
+              method: 'POST',
+              headers: {'Content-Type': 'application/octet-stream'},
+              body: chunk,
+            });
+            onProgress(Math.min(1, (offset + chunk.size) / file.size));
+          }
+        } catch (error) {
+          try { await act(`manager/uploads/${uploadId}/abort`, {method: 'POST'}); } catch { /* best-effort cleanup */ }
+          throw error;
+        }
+        return act(`manager/uploads/${uploadId}/finish`, {method: 'POST'});
       }
 
       document.getElementById('upload-form').addEventListener('submit', async event => {
@@ -142,7 +154,7 @@
         const form = event.currentTarget;
         const data = new FormData(form);
         const files = data.getAll('file').filter(entry => entry instanceof File && entry.size > 0);
-        const collection = encodeURIComponent(data.get('collection'));
+        const collection = String(data.get('collection') || '');
         if (files.length === 0) return;
 
         result.textContent = '';
@@ -156,9 +168,10 @@
           const span = 1 / files.length;
           progressLabel.textContent = `Uploading ${index + 1} of ${files.length}: ${file.name}`;
           try {
-            await uploadWithProgress(
-              `manager/upload?collection_id=${collection}`,
+            await uploadChunked(
+              'clip',
               file,
+              collection,
               fraction => { progressFill.style.width = `${Math.round((base + fraction * span) * 100)}%`; }
             );
           } catch (error) {
@@ -518,7 +531,7 @@
         assetWrap.hidden = false;
         assetLabel.textContent = `Uploading ${file.name}`;
         try {
-          await uploadWithProgress('manager/upload-asset', file, fraction => {
+          await uploadChunked('asset', file, null, fraction => {
             assetFill.style.width = `${Math.round(fraction * 100)}%`;
           });
           assetWrap.hidden = true;

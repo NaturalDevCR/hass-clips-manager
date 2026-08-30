@@ -94,13 +94,17 @@ def test_manager_page_only_uses_ingress_safe_relative_action_urls(tmp_path: Path
     html = client.get("/", headers={"X-Ingress-Path": "/api/hassio_ingress/session"}).text
 
     assert "/manager/upload" not in html
+    assert "/manager/uploads" not in html
     assert "/manager/clips" not in html
     assert "/manager/trash" not in html
     assert "/manager/assets" not in html
     assert "/manager/collections" not in html
     assert "/manager/logs" not in html
     assert "/manager/jobs" not in html
-    assert "`manager/upload?collection_id=" in html
+    assert "`manager/uploads?${params}`" in html
+    assert "`manager/uploads/${uploadId}/chunk`" in html
+    assert "`manager/uploads/${uploadId}/finish`" in html
+    assert "`manager/uploads/${uploadId}/abort`" in html
     assert "`manager/clips/${id}/${action}`" in html
     assert "`manager/clips/${id}/delete-confirmation?target=${target}`" in html
     assert "`manager/clips/${id}/delete`" in html
@@ -109,7 +113,6 @@ def test_manager_page_only_uses_ingress_safe_relative_action_urls(tmp_path: Path
     assert "`manager/collections/${id}/directories`" in html
     assert "'manager/trash'" in html
     assert "`manager/trash/${id}/restore`" in html
-    assert "'manager/upload-asset'" in html
     assert "'manager/assets'" in html
     assert "`manager/assets/${encodeURIComponent(name)}/delete`" in html
     assert "'manager/logs'" in html
@@ -538,3 +541,83 @@ def test_manager_page_renders_output_duration_and_tags_columns(tmp_path: Path) -
     assert "films/22222222-2222-2222-2222-222222222222.mp4" in html
     assert "2:05" in html
     assert "night, featured" in html
+
+
+def test_manager_chunked_clip_upload_round_trip(tmp_path: Path) -> None:
+    client = TestClient(_app(tmp_path))
+    _seed_collection(client)
+    csrf = _manager_session(client)
+    headers = {"X-CSRF-Token": csrf}
+
+    begun = client.post(
+        "/manager/uploads?kind=clip&collection_id=films",
+        headers={**headers, "X-Filename": "clip.mp4"},
+    )
+    assert begun.status_code == 201
+    upload_id = begun.json()["upload_id"]
+
+    first = client.post(f"/manager/uploads/{upload_id}/chunk", headers=headers, content=b"cl")
+    second = client.post(f"/manager/uploads/{upload_id}/chunk", headers=headers, content=b"ip")
+    assert first.status_code == second.status_code == 200
+    assert first.json() == {"received": 2}
+    assert second.json() == {"received": 4}
+
+    finished = client.post(f"/manager/uploads/{upload_id}/finish", headers=headers)
+    assert finished.status_code == 201
+    assert finished.json()["relative_source_path"] == "films/clip.mp4"
+    source = client.app.state.resolver.roots[RootKey.SOURCE]
+    assert (source / "films" / "clip.mp4").read_bytes() == b"clip"
+
+    assert client.post(f"/manager/uploads/{upload_id}/chunk", headers=headers).status_code == 404
+
+
+def test_manager_chunked_asset_upload_round_trip(tmp_path: Path) -> None:
+    client = TestClient(_app(tmp_path))
+    csrf = _manager_session(client)
+    headers = {"X-CSRF-Token": csrf}
+
+    begun = client.post(
+        "/manager/uploads?kind=asset",
+        headers={**headers, "X-Filename": "intro.mp4"},
+    )
+    assert begun.status_code == 201
+    upload_id = begun.json()["upload_id"]
+
+    assert client.post(
+        f"/manager/uploads/{upload_id}/chunk", headers=headers, content=b"in"
+    ).json() == {"received": 2}
+    assert client.post(
+        f"/manager/uploads/{upload_id}/chunk", headers=headers, content=b"tro"
+    ).json() == {"received": 5}
+
+    finished = client.post(f"/manager/uploads/{upload_id}/finish", headers=headers)
+    assert finished.status_code == 201
+    assert finished.json()["details"]["filename"] == "intro.mp4"
+    assert client.get("/manager/assets").json() == ["intro.mp4"]
+
+
+def test_manager_chunked_upload_abort_removes_staging_and_requires_csrf(tmp_path: Path) -> None:
+    client = TestClient(_app(tmp_path))
+    _seed_collection(client)
+    csrf = _manager_session(client)
+    headers = {"X-CSRF-Token": csrf}
+
+    unauthenticated = client.post(
+        "/manager/uploads?kind=clip&collection_id=films",
+        headers={"X-Filename": "clip.mp4"},
+    )
+    assert unauthenticated.status_code == 403
+
+    begun = client.post(
+        "/manager/uploads?kind=clip&collection_id=films",
+        headers={**headers, "X-Filename": "clip.mp4"},
+    )
+    upload_id = begun.json()["upload_id"]
+    client.post(f"/manager/uploads/{upload_id}/chunk", headers=headers, content=b"clip")
+    staging = client.app.state.library_manager._upload_staging_root()
+    assert any(staging.iterdir())
+
+    aborted = client.post(f"/manager/uploads/{upload_id}/abort", headers=headers)
+    assert aborted.status_code == 200
+    assert list(staging.iterdir()) == []
+    assert client.post(f"/manager/uploads/{upload_id}/finish", headers=headers).status_code == 404

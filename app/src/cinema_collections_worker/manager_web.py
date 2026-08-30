@@ -16,7 +16,7 @@ from fastapi import Body, FastAPI, Header, HTTPException, Query, Request, Upload
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from .library_manager import DeleteTarget, LibraryManager, TrashTarget
+from .library_manager import DeleteTarget, LibraryManager, TrashTarget, UploadKind
 from .settings import WorkerMode, WorkerSettings
 
 
@@ -264,6 +264,49 @@ def install_manager_routes(app: FastAPI, settings: WorkerSettings) -> None:
         content = await request.body()
         uploaded = UploadFile(file=BytesIO(content), filename=filename)
         return _dump(manager.import_asset(uploaded))
+
+    @app.post("/manager/uploads", status_code=201, include_in_schema=False)
+    def begin_upload(
+        request: Request,
+        kind: Annotated[UploadKind, Query()],
+        filename: Annotated[str, Header(alias="X-Filename")],
+        collection_id: Annotated[str | None, Query(min_length=1)] = None,
+        csrf: Annotated[str | None, Header(alias="X-CSRF-Token")] = None,
+    ) -> Any:
+        manager = _require_action(request, csrf)
+        return {"upload_id": manager.begin_upload(kind, filename, collection_id)}
+
+    @app.post("/manager/uploads/{upload_id}/chunk", include_in_schema=False)
+    async def append_chunk(
+        request: Request,
+        upload_id: str,
+        csrf: Annotated[str | None, Header(alias="X-CSRF-Token")] = None,
+    ) -> Any:
+        manager = _require_action(request, csrf)
+        received: int | None = None
+        # Stream the body so even an oversized single chunk never sits in RAM.
+        async for block in request.stream():
+            received = manager.append_chunk(upload_id, block)
+        if received is None:
+            received = manager.append_chunk(upload_id, b"")
+        return {"received": received}
+
+    @app.post("/manager/uploads/{upload_id}/finish", status_code=201, include_in_schema=False)
+    def finish_upload(
+        request: Request,
+        upload_id: str,
+        csrf: Annotated[str | None, Header(alias="X-CSRF-Token")] = None,
+    ) -> Any:
+        return _dump(_require_action(request, csrf).finish_upload(upload_id))
+
+    @app.post("/manager/uploads/{upload_id}/abort", include_in_schema=False)
+    def abort_upload(
+        request: Request,
+        upload_id: str,
+        csrf: Annotated[str | None, Header(alias="X-CSRF-Token")] = None,
+    ) -> Any:
+        _require_action(request, csrf).abort_upload(upload_id)
+        return {"upload_id": upload_id}
 
     @app.get("/manager/assets", include_in_schema=False)
     def list_assets(request: Request) -> list[str]:

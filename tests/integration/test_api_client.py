@@ -112,6 +112,8 @@ PROFILES_PAGE = {
     ],
 }
 
+ASSETS = ["intro.mp4", "outro.mp4"]
+
 
 @pytest.mark.asyncio
 async def test_health_uses_bearer_auth_and_parses_contract() -> None:
@@ -169,6 +171,42 @@ async def test_list_profiles_parses_paginated_worker_profiles() -> None:
         ),
     )
     assert session.calls[0]["url"] == "http://worker.local/api/v1/profiles?page=1&page_size=100"
+
+
+@pytest.mark.asyncio
+async def test_list_assets_parses_worker_asset_filenames() -> None:
+    """The profile flow's intro/outro dropdowns depend on this plain-list shape."""
+    session = FakeSession(FakeResponse(200, ASSETS))  # type: ignore[arg-type]
+    client = WorkerApiClient("http://worker.local", "token", session)  # type: ignore[arg-type]
+
+    assets = await client.async_list_assets()
+
+    assert assets == ("intro.mp4", "outro.mp4")
+    assert session.calls[0]["url"] == "http://worker.local/api/v1/assets"
+    assert session.calls[0]["headers"] == {"Authorization": "Bearer token"}
+
+
+@pytest.mark.asyncio
+async def test_list_assets_maps_worker_errors_like_other_reads() -> None:
+    client = WorkerApiClient(
+        "http://worker.local", "secret-token", FakeSession(FakeResponse(401, {}))
+    )
+    with pytest.raises(WorkerApiAuthenticationError):
+        await client.async_list_assets()
+
+    malformed = WorkerApiClient(
+        "http://worker.local", "token", FakeSession(FakeResponse(200, {"assets": []}))
+    )
+    with pytest.raises(WorkerApiProtocolError):
+        await malformed.async_list_assets()
+
+    unreachable = WorkerApiClient(
+        "http://worker.local",
+        "token",
+        FakeSession([TimeoutError("request timed out")] * 3),
+    )
+    with pytest.raises(WorkerApiConnectionError):
+        await unreachable.async_list_assets()
 
 
 @pytest.mark.asyncio

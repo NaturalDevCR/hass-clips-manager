@@ -15,7 +15,10 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Literal, Protocol, cast
+from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
+
+if TYPE_CHECKING:
+    from .library_manager import LibraryManager
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -315,6 +318,7 @@ class JobWorker:
         process_factory: Callable[..., Any] = subprocess.Popen,
         queue: PersistentJobQueue | None = None,
         catalog: CatalogService | None = None,
+        library_manager: LibraryManager | None = None,
     ) -> None:
         self.db = db
         self.resolver = resolver
@@ -323,6 +327,7 @@ class JobWorker:
         self.process_factory = process_factory
         self.queue = queue or PersistentJobQueue(db)
         self.catalog = catalog or CatalogService(db, resolver)
+        self.library_manager = library_manager
 
     def claim_next(self) -> JobRecord | None:
         return self.queue.claim_next()
@@ -653,7 +658,8 @@ class JobWorker:
             return JobRunResult(job=self._finish(job, JobState.FAILED, str(exc)[:1000]))
 
     def _cleanup_worker_temporaries(self) -> int:
-        """Remove only direct temp directories tracked by inactive persisted jobs."""
+        """Remove only direct temp directories tracked by inactive persisted jobs,
+        plus tracked upload staging files abandoned past their inactivity bound."""
 
         root = self.resolver.roots[RootKey.TEMP]
         removed = 0
@@ -671,6 +677,8 @@ class JobWorker:
                 continue
             self._cleanup(candidate)
             removed += 1
+        if self.library_manager is not None:
+            removed += self.library_manager.cleanup_abandoned_uploads()
         return removed
 
     def _run_cleanup_job(self, job: JobRecord) -> JobRunResult:

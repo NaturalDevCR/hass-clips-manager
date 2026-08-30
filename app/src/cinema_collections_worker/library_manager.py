@@ -8,7 +8,7 @@ import os
 import shutil
 import uuid
 from contextlib import suppress
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, NoReturn
@@ -24,6 +24,7 @@ from .paths import RootKey, SafePathResolver, validate_filename, validate_relati
 from .queue import PersistentJobQueue
 
 _VIDEO_EXTENSIONS = {".mp4", ".m4v", ".mov", ".mkv", ".avi", ".webm", ".ts"}
+_UPLOAD_MAX_AGE_SECONDS = 24 * 60 * 60
 
 
 class TrashTarget(StrEnum):
@@ -36,6 +37,11 @@ class DeleteTarget(StrEnum):
     SOURCE = "source"
     OUTPUT = "output"
     BOTH = "both"
+
+
+class UploadKind(StrEnum):
+    CLIP = "clip"
+    ASSET = "asset"
 
 
 class AuditEvent(BaseModel):
@@ -260,47 +266,42 @@ class LibraryManager:
             raise ValueError("trash record escapes the Worker trash root") from exc
         return candidate
 
-    def import_clip(self, collection_id: str, upload: UploadFile) -> ClipRecord:
-        """Store an allowed upload below its collection's configured source directory."""
+    def _upload_staging_root(self) -> Path:
+        return self.resolver.roots.get(RootKey.TEMP, self.trash_root) / "uploads"
 
-        name = validate_filename(upload.filename)
-        extension = Path(name).suffix.lower()
-        if extension not in _VIDEO_EXTENSIONS:
-            raise ValueError("unsupported upload extension")
+    def _upload_staging_path(self, value: str) -> Path:
+        """Validate a persisted staging path stays under the upload staging root."""
+        staging_root = self._upload_staging_root().resolve(strict=False)
+        candidate = Path(value).resolve(strict=False)
+        try:
+            candidate.relative_to(staging_root)
+        except ValueError as exc:
+            raise ValueError("upload staging path escapes the Worker temp root") from exc
+        return candidate
+
+    def _clip_destination(self, collection_id: str, name: str) -> Path:
+        collection_root = self._collection_source_root(collection_id)
+        destination = collection_root / name
+        return self.resolver.resolve(
+            RootKey.SOURCE.value,
+            destination.relative_to(self.resolver.roots[RootKey.SOURCE]).as_posix(),
+        )
+
+    def _publish_clip(self, collection_id: str, name: str, staging: Path) -> ClipRecord:
+        """Atomically publish a staged clip file and catalog it, exactly as imports do."""
         collection = self.db.connection.execute(
             "SELECT compiled_output_prefix FROM collections WHERE id=?", (collection_id,)
         ).fetchone()
         if collection is None:
             raise KeyError(collection_id)
-        collection_root = self._collection_source_root(collection_id)
-        destination = collection_root / name
-        destination = self.resolver.resolve(
-            RootKey.SOURCE.value,
-            destination.relative_to(self.resolver.roots[RootKey.SOURCE]).as_posix(),
-        )
+        destination = self._clip_destination(collection_id, name)
         if destination.exists() or destination.is_symlink():
             raise ValueError("destination already exists")
-        # Receive into the Worker temp root first.  A rejected upload must not
-        # create a partially imported file (or collection subdirectory).
-        staging_root = self.resolver.roots.get(RootKey.TEMP, self.trash_root) / "uploads"
-        staging = staging_root / f"{uuid.uuid4().hex}.uploading"
-        written = 0
-        try:
-            staging.parent.mkdir(parents=True, exist_ok=True)
-            with staging.open("xb") as handle:
-                while block := upload.file.read(1024 * 1024):
-                    written += len(block)
-                    if written > self.max_upload_bytes:
-                        raise ValueError("upload exceeds configured size limit")
-                    handle.write(block)
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            self._move_exact(staging, destination)
-        except Exception:
-            if staging.exists():
-                staging.unlink()
-            raise
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        self._move_exact(staging, destination)
         clip_id = str(uuid.uuid4())
         relative_source = destination.relative_to(self.resolver.roots[RootKey.SOURCE]).as_posix()
+        extension = Path(name).suffix.lower()
         relative_output = f"{collection['compiled_output_prefix']}/{clip_id}{extension}"
         now = self._now()
         with self.db.connection:
@@ -324,6 +325,54 @@ class LibraryManager:
         self._audit("library.imported", clip_id, {"collection_id": collection_id, "filename": name})
         return self._clip_from_row(self._clip_row(clip_id))
 
+    def _publish_asset(self, name: str, staging: Path) -> AuditEvent:
+        """Atomically publish a staged asset file, exactly as asset imports do."""
+        destination = self.resolver.resolve(RootKey.ASSETS.value, name)
+        if destination.exists() or destination.is_symlink():
+            raise ValueError("destination already exists")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        self._move_exact(staging, destination)
+        return self._audit("library.asset_imported", name, {"filename": name})
+
+    def _stage_upload_file(self, upload: UploadFile) -> Path:
+        """Receive one upload into the Worker temp root before any publishing."""
+        staging_root = self._upload_staging_root()
+        staging = staging_root / f"{uuid.uuid4().hex}.uploading"
+        written = 0
+        try:
+            staging.parent.mkdir(parents=True, exist_ok=True)
+            with staging.open("xb") as handle:
+                while block := upload.file.read(1024 * 1024):
+                    written += len(block)
+                    if written > self.max_upload_bytes:
+                        raise ValueError("upload exceeds configured size limit")
+                    handle.write(block)
+        except Exception:
+            if staging.exists():
+                staging.unlink()
+            raise
+        return staging
+
+    def import_clip(self, collection_id: str, upload: UploadFile) -> ClipRecord:
+        """Store an allowed upload below its collection's configured source directory."""
+
+        name = validate_filename(upload.filename)
+        if Path(name).suffix.lower() not in _VIDEO_EXTENSIONS:
+            raise ValueError("unsupported upload extension")
+        self._collection_source_root(collection_id)
+        destination = self._clip_destination(collection_id, name)
+        if destination.exists() or destination.is_symlink():
+            raise ValueError("destination already exists")
+        # Receive into the Worker temp root first.  A rejected upload must not
+        # create a partially imported file (or collection subdirectory).
+        staging = self._stage_upload_file(upload)
+        try:
+            return self._publish_clip(collection_id, name, staging)
+        except Exception:
+            if staging.exists():
+                staging.unlink()
+            raise
+
     def import_asset(self, upload: UploadFile) -> AuditEvent:
         """Store one intro/outro asset file flat in the Worker assets root."""
 
@@ -335,24 +384,125 @@ class LibraryManager:
             raise ValueError("destination already exists")
         # Stage in the Worker temp root first, like clip uploads, so a rejected
         # upload never leaves a partially imported asset behind.
-        staging_root = self.resolver.roots.get(RootKey.TEMP, self.trash_root) / "uploads"
-        staging = staging_root / f"{uuid.uuid4().hex}.uploading"
-        written = 0
+        staging = self._stage_upload_file(upload)
         try:
-            staging.parent.mkdir(parents=True, exist_ok=True)
-            with staging.open("xb") as handle:
-                while block := upload.file.read(1024 * 1024):
-                    written += len(block)
-                    if written > self.max_upload_bytes:
-                        raise ValueError("upload exceeds configured size limit")
-                    handle.write(block)
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            self._move_exact(staging, destination)
+            return self._publish_asset(name, staging)
         except Exception:
             if staging.exists():
                 staging.unlink()
             raise
-        return self._audit("library.asset_imported", name, {"filename": name})
+
+    def begin_upload(
+        self, kind: UploadKind | str, filename: str, collection_id: str | None = None
+    ) -> str:
+        """Validate and open a tracked chunked upload before any bytes arrive."""
+
+        try:
+            kind = UploadKind(kind)
+        except ValueError as exc:
+            raise ValueError("upload kind must be clip or asset") from exc
+        name = validate_filename(filename)
+        if Path(name).suffix.lower() not in _VIDEO_EXTENSIONS:
+            raise ValueError("unsupported upload extension")
+        if kind is UploadKind.CLIP:
+            if collection_id is None:
+                raise ValueError("clip uploads require a collection")
+            self._collection_source_root(collection_id)
+        upload_id = uuid.uuid4().hex
+        staging_root = self._upload_staging_root()
+        staging_root.mkdir(parents=True, exist_ok=True)
+        staging = staging_root / f"{upload_id}.uploading"
+        now = self._now()
+        try:
+            with staging.open("xb"):
+                pass
+            with self.db.connection:
+                self.db.connection.execute(
+                    "INSERT INTO upload_sessions("
+                    "id,kind,filename,collection_id,staging_path,bytes_received,"
+                    "created_at,updated_at"
+                    ") VALUES(?,?,?,?,?,0,?,?)",
+                    (upload_id, kind.value, name, collection_id, str(staging), now, now),
+                )
+        except Exception:
+            if staging.exists():
+                staging.unlink()
+            raise
+        return upload_id
+
+    def append_chunk(self, upload_id: str, data: bytes) -> int:
+        """Append one chunk to a tracked upload, enforcing the accumulated cap."""
+
+        row = self.db.connection.execute(
+            "SELECT * FROM upload_sessions WHERE id=?", (upload_id,)
+        ).fetchone()
+        if row is None:
+            raise KeyError(upload_id)
+        total = int(row["bytes_received"]) + len(data)
+        if total > self.max_upload_bytes:
+            raise ValueError("upload exceeds configured size limit")
+        staging = self._upload_staging_path(str(row["staging_path"]))
+        with staging.open("ab") as handle:
+            handle.write(data)
+        with self.db.connection:
+            self.db.connection.execute(
+                "UPDATE upload_sessions SET bytes_received=?, updated_at=? WHERE id=?",
+                (total, self._now(), upload_id),
+            )
+        return total
+
+    def finish_upload(self, upload_id: str) -> ClipRecord | AuditEvent:
+        """Publish a fully received staged upload exactly like a direct import."""
+
+        row = self.db.connection.execute(
+            "SELECT * FROM upload_sessions WHERE id=?", (upload_id,)
+        ).fetchone()
+        if row is None:
+            raise KeyError(upload_id)
+        staging = self._upload_staging_path(str(row["staging_path"]))
+        self._require_regular_file(staging)
+        if str(row["kind"]) == UploadKind.CLIP.value:
+            result = self._publish_clip(str(row["collection_id"]), str(row["filename"]), staging)
+        else:
+            result = self._publish_asset(str(row["filename"]), staging)
+        with self.db.connection:
+            self.db.connection.execute("DELETE FROM upload_sessions WHERE id=?", (upload_id,))
+        return result
+
+    def abort_upload(self, upload_id: str) -> None:
+        """Discard a tracked upload's staging file and tracking state."""
+
+        row = self.db.connection.execute(
+            "SELECT staging_path FROM upload_sessions WHERE id=?", (upload_id,)
+        ).fetchone()
+        if row is None:
+            raise KeyError(upload_id)
+        staging = self._upload_staging_path(str(row["staging_path"]))
+        with self.db.connection:
+            self.db.connection.execute("DELETE FROM upload_sessions WHERE id=?", (upload_id,))
+        if staging.exists():
+            staging.unlink()
+
+    def cleanup_abandoned_uploads(self, max_age_seconds: float = _UPLOAD_MAX_AGE_SECONDS) -> int:
+        """Remove only tracked upload staging files past the inactivity bound."""
+
+        cutoff = (datetime.now(UTC) - timedelta(seconds=max_age_seconds)).isoformat()
+        rows = self.db.connection.execute(
+            "SELECT id, staging_path FROM upload_sessions WHERE updated_at < ?", (cutoff,)
+        ).fetchall()
+        removed = 0
+        for row in rows:
+            try:
+                staging = self._upload_staging_path(str(row["staging_path"]))
+            except ValueError:
+                # A row whose file cannot be proven Worker-owned is left alone.
+                continue
+            with self.db.connection:
+                self.db.connection.execute("DELETE FROM upload_sessions WHERE id=?", (row["id"],))
+            if staging.exists():
+                staging.unlink()
+            removed += 1
+        return removed
 
     def list_assets(self) -> list[str]:
         """List filenames currently present directly under the assets root."""

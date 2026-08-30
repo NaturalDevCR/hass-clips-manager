@@ -24,6 +24,7 @@ EXPECTED_ROUTES = {
     ("GET", "/api/v1/jobs/{job_id}"),
     ("POST", "/api/v1/jobs/{job_id}/cancel"),
     ("GET", "/api/v1/logs"),
+    ("GET", "/api/v1/assets"),
     ("POST", "/api/v1/cleanup-temporaries"),
 }
 

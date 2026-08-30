@@ -573,9 +573,15 @@ class ProfileSubentryFlow(config_entries.ConfigSubentryFlow):
                     title=synchronized.name,
                     data=synchronized.as_dict(),
                 )
+        try:
+            assets = await worker_client_for_entry(self.hass, self._get_entry()).async_list_assets()
+        except WorkerApiError:
+            # A transient Worker outage must not block showing the form; the
+            # intro/outro fields fall back to free text in that case.
+            assets = ()
         return self.async_show_form(
             step_id="reconfigure" if existing is not None else "user",
-            data_schema=_profile_schema(existing),
+            data_schema=_profile_schema(existing, assets),
             errors=errors,
         )
 
@@ -594,6 +600,28 @@ def _profile_selector(profiles: Sequence[WorkerProfileSummary]) -> Any:
             options=[
                 selector.SelectOptionDict(value=profile.id, label=f"{profile.name} ({profile.id})")
                 for profile in profiles
+            ],
+            mode=selector.SelectSelectorMode.DROPDOWN,
+            custom_value=True,
+        )
+    )
+
+
+def _asset_reference_selector(assets: Sequence[str]) -> Any:
+    """Build a dropdown of the Worker's uploaded assets, falling back to free text.
+
+    Falls back to a plain text field (instead of an empty, unusable dropdown)
+    when the Worker's asset list could not be fetched (e.g. transiently
+    unreachable), so the flow never blocks profile editing on that. The empty
+    value is an explicit "None" choice that serializes to a null reference.
+    """
+    if not assets:
+        return str
+    return selector.SelectSelector(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+        selector.SelectSelectorConfig(
+            options=[
+                selector.SelectOptionDict(value="", label="None"),
+                *(selector.SelectOptionDict(value=name, label=name) for name in assets),
             ],
             mode=selector.SelectSelectorMode.DROPDOWN,
             custom_value=True,
@@ -708,7 +736,7 @@ def _collection_from_flow_input(
     )
 
 
-def _profile_schema(existing: ProfileSubentryData | None) -> vol.Schema:
+def _profile_schema(existing: ProfileSubentryData | None, assets: Sequence[str] = ()) -> vol.Schema:
     values = existing.as_dict() if existing else {}
     raw_settings: object = values.get("settings", {})
     form = _profile_form_values(
@@ -776,8 +804,12 @@ def _profile_schema(existing: ProfileSubentryData | None) -> vol.Schema:
             vol.Required(
                 "decode_error_policy", default=form["decode_error_policy"]
             ): _choice_selector([("warn", "Warn"), ("fail", "Fail")]),
-            vol.Optional("intro_reference", default=form["intro_reference"]): str,
-            vol.Optional("outro_reference", default=form["outro_reference"]): str,
+            vol.Optional("intro_reference", default=form["intro_reference"]): (
+                _asset_reference_selector(assets)
+            ),
+            vol.Optional("outro_reference", default=form["outro_reference"]): (
+                _asset_reference_selector(assets)
+            ),
             vol.Required("timeout_seconds", default=form["timeout_seconds"]): _INT_GT_0,
             vol.Optional(
                 "minimum_segment_duration_seconds",

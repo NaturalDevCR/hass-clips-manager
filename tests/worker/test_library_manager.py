@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from pathlib import Path
 
@@ -380,3 +381,157 @@ def test_permanent_delete_targets_only_the_selected_exact_catalog_paths(
     assert event.action_type == "library.permanently_deleted"
     assert (source / "films" / "one.mp4").exists() is source_exists
     assert output.exists() is output_exists
+
+
+def _staging_rows(db: Database) -> list[object]:
+    return db.connection.execute("SELECT * FROM upload_sessions").fetchall()
+
+
+def test_begin_upload_rejects_invalid_requests_before_creating_any_staging_file(
+    tmp_path: Path,
+) -> None:
+    db, manager, _source, _compiled = _manager(tmp_path)
+    staging_root = manager.resolver.roots[RootKey.TEMP] / "uploads"
+
+    with pytest.raises(ValueError):
+        manager.begin_upload("clip", "../one.mp4", "films")
+    with pytest.raises(ValueError, match="extension"):
+        manager.begin_upload("clip", "notes.txt", "films")
+    with pytest.raises(ValueError, match="extension"):
+        manager.begin_upload("asset", "notes.txt")
+    with pytest.raises(KeyError):
+        manager.begin_upload("clip", "one.mp4", "missing-collection")
+    with pytest.raises(ValueError, match="kind"):
+        manager.begin_upload("unknown-kind", "one.mp4", "films")
+
+    assert not staging_root.exists() or list(staging_root.iterdir()) == []
+    assert _staging_rows(db) == []
+
+
+def test_append_chunk_accumulates_and_enforces_the_cap_on_the_running_total(
+    tmp_path: Path,
+) -> None:
+    db, manager, _source, _compiled = _manager(tmp_path)
+    upload_id = manager.begin_upload("clip", "one.mp4", "films")
+
+    assert manager.append_chunk(upload_id, b"0123456789") == 10
+    with pytest.raises(ValueError, match="size"):
+        manager.append_chunk(upload_id, b"01234567")
+
+    row = db.connection.execute(
+        "SELECT bytes_received, staging_path FROM upload_sessions WHERE id=?", (upload_id,)
+    ).fetchone()
+    assert row["bytes_received"] == 10
+    assert Path(str(row["staging_path"])).read_bytes() == b"0123456789"
+
+
+def test_append_chunk_rejects_unknown_and_finished_upload_ids(tmp_path: Path) -> None:
+    db, manager, _source, _compiled = _manager(tmp_path)
+    upload_id = manager.begin_upload("clip", "one.mp4", "films")
+    manager.append_chunk(upload_id, b"clip")
+    manager.finish_upload(upload_id)
+
+    with pytest.raises(KeyError):
+        manager.append_chunk("never-existed", b"clip")
+    with pytest.raises(KeyError):
+        manager.append_chunk(upload_id, b"clip")
+    assert _staging_rows(db) == []
+
+
+def test_finish_upload_publishes_byte_identical_multi_chunk_content(tmp_path: Path) -> None:
+    db, manager, source, _compiled = _manager(tmp_path)
+    upload_id = manager.begin_upload("clip", "one.mp4", "films")
+    manager.append_chunk(upload_id, b"fir")
+    manager.append_chunk(upload_id, b"st-part")
+    manager.append_chunk(upload_id, b"second")
+
+    clip = manager.finish_upload(upload_id)
+
+    assert clip.relative_source_path == "films/one.mp4"
+    assert (source / "films" / "one.mp4").read_bytes() == b"first-partsecond"
+    assert (
+        db.connection.execute(
+            "SELECT count(*) FROM audit_events WHERE action_type='library.imported'"
+        ).fetchone()[0]
+        == 1
+    )
+    assert _staging_rows(db) == []
+
+
+def test_finish_upload_refuses_an_existing_destination_and_keeps_the_upload(
+    tmp_path: Path,
+) -> None:
+    db, manager, source, _compiled = _manager(tmp_path)
+    manager.import_clip("films", _upload("one.mp4", b"original"))
+    upload_id = manager.begin_upload("clip", "one.mp4", "films")
+    manager.append_chunk(upload_id, b"replacement")
+
+    with pytest.raises(ValueError, match="already exists"):
+        manager.finish_upload(upload_id)
+
+    assert (source / "films" / "one.mp4").read_bytes() == b"original"
+    assert len(_staging_rows(db)) == 1
+
+    manager.abort_upload(upload_id)
+    assert _staging_rows(db) == []
+
+
+def test_finish_upload_publishes_assets_exactly_like_import_asset(tmp_path: Path) -> None:
+    db, manager, _source, _compiled = _manager(tmp_path)
+    assets = manager.resolver.roots[RootKey.ASSETS]
+    upload_id = manager.begin_upload("asset", "intro.mp4")
+    manager.append_chunk(upload_id, b"in")
+    manager.append_chunk(upload_id, b"tro")
+
+    event = manager.finish_upload(upload_id)
+
+    assert event.action_type == "library.asset_imported"
+    assert event.details["filename"] == "intro.mp4"
+    assert (assets / "intro.mp4").read_bytes() == b"intro"
+    assert manager.list_assets() == ["intro.mp4"]
+
+    other = manager.begin_upload("asset", "intro.mp4")
+    manager.append_chunk(other, b"again")
+    with pytest.raises(ValueError, match="already exists"):
+        manager.finish_upload(other)
+
+
+def test_abort_upload_removes_the_staging_file_and_its_tracking_row(tmp_path: Path) -> None:
+    db, manager, _source, _compiled = _manager(tmp_path)
+    upload_id = manager.begin_upload("clip", "one.mp4", "films")
+    manager.append_chunk(upload_id, b"clip")
+    row = db.connection.execute(
+        "SELECT staging_path FROM upload_sessions WHERE id=?", (upload_id,)
+    ).fetchone()
+    staging = Path(str(row["staging_path"]))
+    assert staging.exists()
+
+    manager.abort_upload(upload_id)
+
+    assert not staging.exists()
+    assert _staging_rows(db) == []
+    with pytest.raises(KeyError):
+        manager.abort_upload(upload_id)
+
+
+def test_abandoned_upload_cleanup_removes_only_stale_tracked_uploads(tmp_path: Path) -> None:
+    db, manager, _source, _compiled = _manager(tmp_path)
+    stale_id = manager.begin_upload("clip", "stale.mp4", "films")
+    manager.append_chunk(stale_id, b"old")
+    fresh_id = manager.begin_upload("asset", "fresh.mp4")
+    manager.append_chunk(fresh_id, b"new")
+    rows = db.connection.execute("SELECT id, staging_path FROM upload_sessions").fetchall()
+    paths = {str(row["id"]): Path(str(row["staging_path"])) for row in rows}
+    stale_timestamp = (datetime.now(UTC) - timedelta(hours=48)).isoformat()
+    with db.connection:
+        db.connection.execute(
+            "UPDATE upload_sessions SET updated_at=? WHERE id=?", (stale_timestamp, stale_id)
+        )
+
+    removed = manager.cleanup_abandoned_uploads()
+
+    assert removed == 1
+    assert not paths[stale_id].exists()
+    assert paths[fresh_id].read_bytes() == b"new"
+    remaining = db.connection.execute("SELECT id FROM upload_sessions").fetchall()
+    assert [str(row["id"]) for row in remaining] == [fresh_id]

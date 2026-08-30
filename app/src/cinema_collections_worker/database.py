@@ -222,6 +222,26 @@ class Database:
             """)
             self.connection.execute("INSERT INTO schema_migrations VALUES (6, datetime('now'))")
             self.connection.commit()
+        if not self.connection.execute(
+            "SELECT 1 FROM schema_migrations WHERE version=7"
+        ).fetchone():
+            # In-flight chunked uploads are persisted so a Worker restart
+            # mid-upload leaves recoverable state (and a cleanup target)
+            # instead of an orphaned temp file with no owner.
+            self.connection.executescript("""
+                CREATE TABLE upload_sessions (
+                    id TEXT PRIMARY KEY,
+                    kind TEXT NOT NULL,
+                    filename TEXT NOT NULL,
+                    collection_id TEXT,
+                    staging_path TEXT NOT NULL,
+                    bytes_received INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+            """)
+            self.connection.execute("INSERT INTO schema_migrations VALUES (7, datetime('now'))")
+            self.connection.commit()
 
     def close(self) -> None:
         with self._connections_lock:
