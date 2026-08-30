@@ -287,7 +287,8 @@ def test_manager_clip_row_manage_panel_labels_targets_and_actions(tmp_path: Path
     assert 'data-action="manage-toggle"' in html
     assert 'aria-expanded="false"' in html
     assert 'class="row-panel"' in html
-    assert 'class="row-panel" hidden' in html
+    assert 'class="row-panel-row"' in html
+    assert '" hidden><td colspan="7"><div class="row-panel">' in html
     assert 'class="panel-label">Move to trash</span>' in html
     assert 'class="panel-label">Permanently delete</span>' in html
     assert 'class="trash-target"' in html
@@ -311,8 +312,57 @@ def test_manager_clip_row_keeps_clip_id_discoverable(tmp_path: Path) -> None:
 
     html = client.get("/", headers={"X-Ingress-Path": "/api/hassio_ingress/session"}).text
 
-    assert html.count(f'data-clip-id="{clip_id}"') == 1
+    assert html.count(f'data-clip-id="{clip_id}"') == 2
     assert f'title="{clip_id}"' in html
+
+
+def test_manager_clip_renders_hidden_full_width_panel_row(tmp_path: Path) -> None:
+    client = TestClient(_app(tmp_path))
+    _seed_collection(client)
+    csrf = _manager_session(client)
+    uploaded = client.post(
+        "/manager/upload?collection_id=films",
+        headers={"X-CSRF-Token": csrf, "X-Filename": "clip.mp4"},
+        content=b"clip",
+    )
+    assert uploaded.status_code == 201
+    clip_id = uploaded.json()["id"]
+
+    html = client.get("/", headers={"X-Ingress-Path": "/api/hassio_ingress/session"}).text
+
+    table = html.split('id="clips-table"', 1)[1].split("</table>", 1)[0]
+    column_count = table.count("<th>")
+    assert column_count == 7
+    assert html.count(f'data-clip-id="{clip_id}"') == 2
+    assert 'class="row-panel-row" data-clip-id="' in html
+    assert f'<td colspan="{column_count}"><div class="row-panel">' in html
+
+
+def test_manager_clip_renders_escaped_source_path_attribute(tmp_path: Path) -> None:
+    client = TestClient(_app(tmp_path))
+    _seed_collection(client)
+    _manager_session(client)
+    with client.app.state.database.connection:
+        client.app.state.database.connection.execute(
+            "INSERT INTO clips(id,collection_id,state,relative_source_path,relative_output_path,"
+            "duration_seconds,output_available,metadata,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
+            (
+                "44444444-4444-4444-4444-444444444444",
+                "films",
+                "ready",
+                'films/<b>&"clip".mp4',
+                "films/44444444-4444-4444-4444-444444444444.mp4",
+                0.0,
+                0,
+                "{}",
+                "2026-01-01T00:00:00+00:00",
+            ),
+        )
+
+    html = client.get("/", headers={"X-Ingress-Path": "/api/hassio_ingress/session"}).text
+
+    assert 'data-source-path="films/&lt;b&gt;&amp;&quot;clip&quot;.mp4"' in html
+    assert '"clip".mp4' not in html
 
 
 def test_manager_page_table_headers_omit_clip_id_column(tmp_path: Path) -> None:

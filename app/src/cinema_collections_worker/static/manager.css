@@ -283,6 +283,13 @@ td code {
 #clips-table th:nth-child(7),
 #clips-table td:nth-child(7) { width: 12rem; white-space: nowrap; }
 
+/* The panel row's single cell spans every column, so column-width rules
+   aimed at individual data cells must not shrink or wrap-restrict it. */
+#clips-table tr.row-panel-row td {
+  width: auto;
+  white-space: normal;
+}
+
 td.actions {
   display: flex;
   flex-wrap: wrap;
@@ -292,38 +299,17 @@ td.actions {
 
 td.actions button { padding: 0.35rem 0.7rem; font-size: 0.85rem; }
 
-td.actions select {
-  font: inherit;
-  font-size: 0.85rem;
-  color: var(--text);
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 0.35rem;
-  padding: 0.35rem 0.5rem;
-}
-
 td.actions button[data-action="manage-toggle"] {
   color: var(--accent);
   border-color: var(--accent);
 }
 
-td.actions button[data-action="trash"],
-td.actions button[data-action="delete"] {
-  color: var(--danger);
-  border-color: var(--danger);
-}
-
 .row-panel {
-  flex-basis: 100%;
   display: grid;
-  /* Lay the groups out side by side instead of stacking them in the narrow
-     actions column; the surrounding .table-scroll handles any overflow. */
+  /* The panel is its own full-width table row now, so the groups have the
+     whole column width to lay out side by side instead of a cramped cell. */
   grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
-  min-width: 30rem;
   gap: 0.85rem 1.25rem;
-  padding-top: 0.85rem;
-  margin-top: 0.35rem;
-  border-top: 1px solid var(--border);
 }
 
 .row-panel .panel-group {
@@ -331,6 +317,8 @@ td.actions button[data-action="delete"] {
 }
 
 .row-panel[hidden] { display: none; }
+
+tr.row-panel-row[hidden] { display: none; }
 
 .panel-group {
   display: flex;
@@ -348,7 +336,23 @@ td.actions button[data-action="delete"] {
   color: var(--text-muted);
 }
 
-td.actions form.row-form {
+.row-panel select {
+  font: inherit;
+  font-size: 0.85rem;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.35rem;
+  padding: 0.35rem 0.5rem;
+}
+
+.row-panel button[data-action="trash"],
+.row-panel button[data-action="delete"] {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.row-panel form.row-form {
   flex-basis: 100%;
   display: flex;
   flex-wrap: wrap;
@@ -357,7 +361,7 @@ td.actions form.row-form {
   margin: 0.25rem 0;
 }
 
-td.actions form.row-form[hidden] { display: none; }
+.row-panel form.row-form[hidden] { display: none; }
 
 form.row-form input,
 form.row-form textarea {

@@ -29,6 +29,9 @@ def _worker_version() -> str:
 
 _COOKIE = "cinema_collections_manager"
 _SESSION_SECONDS = 60 * 60
+# Column count of the clip table, used by both the colspan on the expandable
+# panel row and the empty-state placeholder so neither can drift apart.
+_CLIP_TABLE_COLUMNS = 7
 
 
 class _MetadataBody(BaseModel):
@@ -140,8 +143,11 @@ def _render_clip_row(row: Any) -> str:
         if output_available
         else '<option value="source">Source</option>'
     )
+    # Both rows carry the clip identity and the paths the panel's handlers
+    # read back off row.dataset (the source cell only exists on the data row).
     return (
-        '<tr data-clip-id="{id}" data-output-path="{output}" title="{id}">'
+        '<tr data-clip-id="{id}" data-output-path="{output}" '
+        'data-source-path="{source_path}" title="{id}">'
         "<td>{collection}</td>"
         '<td title="{source_path}">{source_name}{failure}</td>'
         "<td>{state}</td>"
@@ -150,7 +156,11 @@ def _render_clip_row(row: Any) -> str:
         '<td class="actions">'
         '<button data-action="recompile">Recompile</button> '
         '<button data-action="manage-toggle" aria-expanded="false">Manage</button>'
-        '<div class="row-panel" hidden>'
+        "</td></tr>"
+        '<tr class="row-panel-row" data-clip-id="{id}" data-output-path="{output}" '
+        'data-source-path="{source_path}" hidden>'
+        '<td colspan="{colspan}">'
+        '<div class="row-panel">'
         '<div class="panel-group"><span class="panel-label">Re-scan the source file</span>'
         '<button data-action="scan">Scan</button></div>'
         '<div class="panel-group"><span class="panel-label">Move to trash</span>'
@@ -184,6 +194,7 @@ def _render_clip_row(row: Any) -> str:
             notes=html.escape(notes),
             targets=target_option,
             source=html.escape(source_value, quote=True),
+            colspan=_CLIP_TABLE_COLUMNS,
         )
     )
 
@@ -197,7 +208,7 @@ def _render_manager(request: Request, csrf: str) -> str:
     ).fetchall()
     clip_rows = (
         "".join(_render_clip_row(row) for row in rows)
-        or '<tr><td colspan="7">No catalogued clips yet.</td></tr>'
+        or f'<tr><td colspan="{_CLIP_TABLE_COLUMNS}">No catalogued clips yet.</td></tr>'
     )
     template = (
         Path(__file__).with_name("templates").joinpath("manager.html").read_text(encoding="utf-8")

@@ -330,10 +330,7 @@
         const target = row.querySelector('.delete-target').value;
         try {
           const info = await act(`manager/clips/${id}/delete-confirmation?target=${target}`);
-          const sourceCell = row.querySelector('td:nth-child(2)');
-          const sourcePath = sourceCell && sourceCell.getAttribute('title')
-            ? sourceCell.getAttribute('title')
-            : sourceCell.textContent;
+          const sourcePath = row.dataset.sourcePath || '';
           const outputPath = row.dataset.outputPath || '(no compiled output)';
           const affected = target === 'source'
             ? `Source: ${sourcePath}`
@@ -355,9 +352,9 @@
         const id = row.dataset.clipId;
         const action = button.dataset.action;
         if (action === 'manage-toggle') {
-          const panel = row.querySelector('.row-panel');
-          panel.hidden = !panel.hidden;
-          button.setAttribute('aria-expanded', panel.hidden ? 'false' : 'true');
+          const panelRow = row.nextElementSibling;
+          panelRow.hidden = !panelRow.hidden;
+          button.setAttribute('aria-expanded', panelRow.hidden ? 'false' : 'true');
           return;
         }
         if (action === 'edit-toggle' || action === 'move-toggle') {
