@@ -39,6 +39,14 @@ Mutating routes are `POST /api/v1/collections`,
 `POST /api/v1/compile`, `POST /api/v1/jobs/{job_id}/cancel`, and
 `POST /api/v1/cleanup-temporaries`.
 
+Authenticated read-only routes are `GET /api/v1/health`,
+`GET /api/v1/status`, `GET /api/v1/collections`, `GET /api/v1/profiles`,
+`GET /api/v1/clips`, `GET /api/v1/clips/{clip_id}`, `GET /api/v1/jobs`,
+`GET /api/v1/jobs/{job_id}`, `GET /api/v1/logs`, and `GET /api/v1/assets`.
+`GET /api/v1/assets` returns the bare filenames currently present in the
+Worker's assets root; the integration's profile editor uses it to populate the
+intro/outro asset pickers.
+
 ## Jobs, progress, and timeouts
 
 Scan, compile, and temporary-cleanup requests return `202` and a job object.
