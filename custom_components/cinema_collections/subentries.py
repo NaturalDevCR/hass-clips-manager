@@ -360,7 +360,6 @@ def async_update_collection_subentry(
 _INT_GT_0 = vol.All(vol.Coerce(int), vol.Range(min=1))
 _INT_1_16384 = vol.All(vol.Coerce(int), vol.Range(min=1, max=16384))
 _INT_1_240 = vol.All(vol.Coerce(int), vol.Range(min=1, max=240))
-_INT_1_8 = vol.All(vol.Coerce(int), vol.Range(min=1, max=8))
 _FLOAT_0_51 = vol.All(vol.Coerce(float), vol.Range(min=0, max=51))
 _FLOAT_M70_M5 = vol.All(vol.Coerce(float), vol.Range(min=-70, max=-5))
 _FLOAT_M20_0 = vol.All(vol.Coerce(float), vol.Range(min=-20, max=0))
@@ -378,16 +377,71 @@ _FLOAT_GT_0_LE_60 = vol.All(vol.Coerce(float), vol.Range(min=0, max=60, min_incl
 # bad value into a normal "invalid_profile" form error.
 
 
-def _choice_selector(choices: Sequence[tuple[str, str]]) -> Any:
-    """Build a dropdown of stable enum values with explicit inline labels."""
+def _choice_selector(choices: Sequence[tuple[str, str]], *, custom_value: bool = False) -> Any:
+    """Build a dropdown of stable values, optionally accepting a typed value.
+
+    ``custom_value`` lets the user type a value outside the offered list, which
+    keeps unusual-but-valid values working for fields whose Worker model is an
+    open string (codecs, presets, channel counts, sample rates, ...).
+    """
     return selector.SelectSelector(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
         selector.SelectSelectorConfig(
             options=[
                 selector.SelectOptionDict(value=value, label=label) for value, label in choices
             ],
             mode=selector.SelectSelectorMode.DROPDOWN,
+            custom_value=custom_value,
         )
     )
+
+
+_VIDEO_CODEC_OPTIONS = (
+    ("libx264", "libx264"),
+    ("libx265", "libx265"),
+)
+_VIDEO_PRESET_OPTIONS = tuple(
+    (preset, preset)
+    for preset in (
+        "ultrafast",
+        "superfast",
+        "veryfast",
+        "faster",
+        "fast",
+        "medium",
+        "slow",
+        "slower",
+        "veryslow",
+        "placebo",
+    )
+)
+_VIDEO_H264_PROFILE_OPTIONS = tuple(
+    (profile, profile) for profile in ("baseline", "main", "high", "high10", "high422", "high444")
+)
+_VIDEO_LEVEL_OPTIONS = tuple(
+    (level, level)
+    for level in ("3.0", "3.1", "4.0", "4.1", "4.2", "5.0", "5.1", "5.2", "6.0", "6.1", "6.2")
+)
+_VIDEO_PIXEL_FORMAT_OPTIONS = tuple(
+    (pixel_format, pixel_format)
+    for pixel_format in ("yuv420p", "yuv422p", "yuv444p", "yuv420p10le")
+)
+_AUDIO_CODEC_OPTIONS = (
+    ("aac", "aac"),
+    ("libopus", "libopus"),
+    ("libmp3lame", "libmp3lame"),
+    ("flac", "flac"),
+)
+_AUDIO_CHANNEL_OPTIONS = (
+    ("1", "Mono"),
+    ("2", "Stereo"),
+    ("6", "5.1"),
+    ("8", "7.1"),
+)
+_AUDIO_SAMPLE_RATE_OPTIONS = (
+    ("44100", "44100"),
+    ("48000", "48000"),
+    ("96000", "96000"),
+)
 
 
 def _as_mapping(value: object) -> Mapping[str, object]:
@@ -533,24 +587,101 @@ class CollectionSubentryFlow(config_entries.ConfigSubentryFlow):
 
 
 class ProfileSubentryFlow(config_entries.ConfigSubentryFlow):
-    """Create or update a Worker processing-profile subentry."""
+    """Create or update a Worker processing-profile subentry.
+
+    The 40 profile fields are presented as a four-step wizard so related
+    settings stay together. Input accumulates in ``self._data`` across the
+    steps and is only reassembled and synchronized with the Worker on the
+    final "output" step.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._existing: ProfileSubentryData | None = None
+        self._data: dict[str, object] = {}
+        self._assets: tuple[str, ...] = ()
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> SubentryFlowResult:
-        return await self._async_step_configure(user_input, existing=None)
+        """Create a profile subentry from native UI fields."""
+        self._existing = None
+        return await self._async_step_video(user_input)
 
     async def async_step_reconfigure(
         self, user_input: dict[str, Any] | None = None
     ) -> SubentryFlowResult:
-        existing = ProfileSubentryData.from_dict(self._get_reconfigure_subentry().data)
-        return await self._async_step_configure(user_input, existing=existing)
+        """Revision-patch the selected profile subentry."""
+        self._existing = ProfileSubentryData.from_dict(self._get_reconfigure_subentry().data)
+        return await self._async_step_video(user_input)
 
-    async def _async_step_configure(
-        self, user_input: dict[str, Any] | None, existing: ProfileSubentryData | None
+    async def async_step_video(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        return await self._async_step_video(user_input)
+
+    async def _async_step_video(self, user_input: dict[str, Any] | None) -> SubentryFlowResult:
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            self._data.update(user_input)
+            if str(user_input["video_quality_mode"]) == "bitrate" and user_input.get(
+                "video_bitrate_kbps"
+            ) in (None, ""):
+                errors["base"] = "invalid_profile"
+            else:
+                return await self.async_step_audio()
+        return self.async_show_form(
+            step_id="video",
+            data_schema=_profile_video_schema(self._existing),
+            errors=errors,
+        )
+
+    async def async_step_audio(
+        self, user_input: dict[str, Any] | None = None
     ) -> SubentryFlowResult:
         errors: dict[str, str] = {}
         if user_input is not None:
+            self._data.update(user_input)
+            audio_policy = str(user_input["audio_missing_policy"])
+            audio_fallback = str(user_input["audio_fallback"])
+            if audio_policy == "required" and audio_fallback != "none":
+                errors["base"] = "profile_audio_policy"
+            else:
+                return await self.async_step_timing()
+        return self.async_show_form(
+            step_id="audio",
+            data_schema=_profile_audio_schema(self._existing),
+            errors=errors,
+        )
+
+    async def async_step_timing(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            self._data.update(user_input)
+            return await self.async_step_output()
+        if not self._assets:
             try:
-                candidate = _profile_from_flow_input(user_input, existing)
+                self._assets = await worker_client_for_entry(
+                    self.hass, self._get_entry()
+                ).async_list_assets()
+            except WorkerApiError:
+                # A transient Worker outage must not block showing the form;
+                # the intro/outro fields fall back to free text in that case.
+                self._assets = ()
+        return self.async_show_form(
+            step_id="timing",
+            data_schema=_profile_timing_schema(self._existing, self._assets),
+            errors=errors,
+        )
+
+    async def async_step_output(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            self._data.update(user_input)
+            try:
+                candidate = _profile_from_flow_input(self._data, self._existing)
                 synchronized = await async_sync_profile(
                     worker_client_for_entry(self.hass, self._get_entry()), candidate
                 )
@@ -561,7 +692,7 @@ class ProfileSubentryFlow(config_entries.ConfigSubentryFlow):
             except (KeyError, TypeError, ValueError):
                 errors["base"] = "invalid_profile"
             else:
-                if existing is None:
+                if self._existing is None:
                     return self.async_create_entry(
                         title=synchronized.name,
                         data=synchronized.as_dict(),
@@ -573,15 +704,9 @@ class ProfileSubentryFlow(config_entries.ConfigSubentryFlow):
                     title=synchronized.name,
                     data=synchronized.as_dict(),
                 )
-        try:
-            assets = await worker_client_for_entry(self.hass, self._get_entry()).async_list_assets()
-        except WorkerApiError:
-            # A transient Worker outage must not block showing the form; the
-            # intro/outro fields fall back to free text in that case.
-            assets = ()
         return self.async_show_form(
-            step_id="reconfigure" if existing is not None else "user",
-            data_schema=_profile_schema(existing, assets),
+            step_id="output",
+            data_schema=_profile_output_schema(self._existing),
             errors=errors,
         )
 
@@ -736,12 +861,19 @@ def _collection_from_flow_input(
     )
 
 
-def _profile_schema(existing: ProfileSubentryData | None, assets: Sequence[str] = ()) -> vol.Schema:
+def _profile_form_defaults(existing: ProfileSubentryData | None) -> dict[str, object]:
+    """Return field-by-field form defaults for a profile wizard step."""
     values = existing.as_dict() if existing else {}
     raw_settings: object = values.get("settings", {})
-    form = _profile_form_values(
+    return _profile_form_values(
         dict(cast(Mapping[str, object], raw_settings)) if isinstance(raw_settings, Mapping) else {}
     )
+
+
+def _profile_video_schema(existing: ProfileSubentryData | None) -> vol.Schema:
+    """Identity plus every video encoding, quality and scaling field."""
+    values = existing.as_dict() if existing else {}
+    form = _profile_form_defaults(existing)
     return vol.Schema(
         {
             vol.Required("profile_id", default=values.get("profile_id", "")): str,
@@ -749,26 +881,51 @@ def _profile_schema(existing: ProfileSubentryData | None, assets: Sequence[str] 
             vol.Required("video_width", default=form["video_width"]): _INT_1_16384,
             vol.Required("video_height", default=form["video_height"]): _INT_1_16384,
             vol.Required("video_fps", default=form["video_fps"]): _INT_1_240,
-            vol.Required("video_codec", default=form["video_codec"]): str,
-            vol.Required("video_preset", default=form["video_preset"]): str,
+            vol.Required("video_codec", default=form["video_codec"]): _choice_selector(
+                _VIDEO_CODEC_OPTIONS, custom_value=True
+            ),
+            vol.Required("video_preset", default=form["video_preset"]): _choice_selector(
+                _VIDEO_PRESET_OPTIONS, custom_value=True
+            ),
             vol.Required(
                 "video_quality_mode", default=form["video_quality_mode"]
             ): _choice_selector([("crf", "CRF"), ("bitrate", "Bitrate")]),
             vol.Required("video_crf", default=form["video_crf"]): _FLOAT_0_51,
             vol.Optional("video_bitrate_kbps", default=form["video_bitrate_kbps"]): str,
-            vol.Required("video_h264_profile", default=form["video_h264_profile"]): str,
-            vol.Required("video_level", default=form["video_level"]): str,
-            vol.Required("video_pixel_format", default=form["video_pixel_format"]): str,
+            vol.Required(
+                "video_h264_profile", default=form["video_h264_profile"]
+            ): _choice_selector(_VIDEO_H264_PROFILE_OPTIONS, custom_value=True),
+            vol.Required("video_level", default=form["video_level"]): _choice_selector(
+                _VIDEO_LEVEL_OPTIONS, custom_value=True
+            ),
+            vol.Required(
+                "video_pixel_format", default=form["video_pixel_format"]
+            ): _choice_selector(_VIDEO_PIXEL_FORMAT_OPTIONS, custom_value=True),
             vol.Required(
                 "video_scaling_strategy", default=form["video_scaling_strategy"]
             ): _choice_selector([("aspect_fit", "Aspect fit"), ("crop", "Crop")]),
             vol.Required("video_sar_num", default=form["video_sar_num"]): _INT_GT_0,
             vol.Required("video_sar_den", default=form["video_sar_den"]): _INT_GT_0,
             vol.Required("video_fast_start", default=form["video_fast_start"]): bool,
-            vol.Required("audio_codec", default=form["audio_codec"]): str,
+        }
+    )
+
+
+def _profile_audio_schema(existing: ProfileSubentryData | None) -> vol.Schema:
+    """Every audio encoding and loudness field."""
+    form = _profile_form_defaults(existing)
+    return vol.Schema(
+        {
+            vol.Required("audio_codec", default=form["audio_codec"]): _choice_selector(
+                _AUDIO_CODEC_OPTIONS, custom_value=True
+            ),
             vol.Required("audio_bitrate_kbps", default=form["audio_bitrate_kbps"]): _INT_GT_0,
-            vol.Required("audio_channels", default=form["audio_channels"]): _INT_1_8,
-            vol.Required("audio_sample_rate", default=form["audio_sample_rate"]): _INT_GT_0,
+            vol.Required("audio_channels", default=str(form["audio_channels"])): _choice_selector(
+                _AUDIO_CHANNEL_OPTIONS, custom_value=True
+            ),
+            vol.Required(
+                "audio_sample_rate", default=str(form["audio_sample_rate"])
+            ): _choice_selector(_AUDIO_SAMPLE_RATE_OPTIONS, custom_value=True),
             vol.Required(
                 "audio_missing_policy", default=form["audio_missing_policy"]
             ): _choice_selector([("required", "Required"), ("silence", "Silence")]),
@@ -789,6 +946,23 @@ def _profile_schema(existing: ProfileSubentryData | None, assets: Sequence[str] 
             vol.Required(
                 "loudness_final_mix_normalization", default=form["loudness_final_mix_normalization"]
             ): bool,
+        }
+    )
+
+
+def _profile_timing_schema(
+    existing: ProfileSubentryData | None, assets: Sequence[str] = ()
+) -> vol.Schema:
+    """Intro/outro references and fade and segment timing fields."""
+    form = _profile_form_defaults(existing)
+    return vol.Schema(
+        {
+            vol.Optional("intro_reference", default=form["intro_reference"]): (
+                _asset_reference_selector(assets)
+            ),
+            vol.Optional("outro_reference", default=form["outro_reference"]): (
+                _asset_reference_selector(assets)
+            ),
             vol.Required(
                 "intro_to_clip_fade_seconds", default=form["intro_to_clip_fade_seconds"]
             ): _FLOAT_GT_0_LE_60,
@@ -797,6 +971,19 @@ def _profile_schema(existing: ProfileSubentryData | None, assets: Sequence[str] 
             ): _FLOAT_GT_0_LE_60,
             vol.Required("fade_in_seconds", default=form["fade_in_seconds"]): _FLOAT_0_60,
             vol.Required("fade_out_seconds", default=form["fade_out_seconds"]): _FLOAT_0_60,
+            vol.Optional(
+                "minimum_segment_duration_seconds",
+                default=form["minimum_segment_duration_seconds"],
+            ): str,
+        }
+    )
+
+
+def _profile_output_schema(existing: ProfileSubentryData | None) -> vol.Schema:
+    """Output container, hardware, decode-error and timeout fields."""
+    form = _profile_form_defaults(existing)
+    return vol.Schema(
+        {
             vol.Required("output_container", default=form["output_container"]): _choice_selector(
                 [("mp4", "MP4"), ("mkv", "MKV"), ("webm", "WebM")]
             ),
@@ -804,17 +991,7 @@ def _profile_schema(existing: ProfileSubentryData | None, assets: Sequence[str] 
             vol.Required(
                 "decode_error_policy", default=form["decode_error_policy"]
             ): _choice_selector([("warn", "Warn"), ("fail", "Fail")]),
-            vol.Optional("intro_reference", default=form["intro_reference"]): (
-                _asset_reference_selector(assets)
-            ),
-            vol.Optional("outro_reference", default=form["outro_reference"]): (
-                _asset_reference_selector(assets)
-            ),
             vol.Required("timeout_seconds", default=form["timeout_seconds"]): _INT_GT_0,
-            vol.Optional(
-                "minimum_segment_duration_seconds",
-                default=form["minimum_segment_duration_seconds"],
-            ): str,
         }
     )
 

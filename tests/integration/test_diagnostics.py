@@ -15,7 +15,13 @@ from custom_components.cinema_collections.coordinator import CoordinatorSnapshot
 from custom_components.cinema_collections.diagnostics import async_get_config_entry_diagnostics
 from custom_components.cinema_collections.models import WorkerError, WorkerHealth, WorkerStatus
 from custom_components.cinema_collections.options_flow import OVERRIDE_MODE_SELECTOR
-from custom_components.cinema_collections.subentries import _collection_schema, _profile_schema
+from custom_components.cinema_collections.subentries import (
+    _collection_schema,
+    _profile_audio_schema,
+    _profile_output_schema,
+    _profile_timing_schema,
+    _profile_video_schema,
+)
 
 
 @pytest.mark.asyncio
@@ -138,11 +144,22 @@ def test_translation_files_are_complete_and_cover_the_integration_surface() -> N
     }
     for subentry_type, schema in {
         "collection": _collection_schema(None),
-        "profile": _profile_schema(None),
     }.items():
         fields = {str(getattr(field, "schema", field)) for field in schema.schema}
         for step in ("user", "reconfigure"):
             assert set(english["config_subentries"][subentry_type]["step"][step]["data"]) == fields
+    profile_steps = {
+        "video": _profile_video_schema(None),
+        "audio": _profile_audio_schema(None),
+        "timing": _profile_timing_schema(None),
+        "output": _profile_output_schema(None),
+    }
+    for step_id, schema in profile_steps.items():
+        fields = {str(getattr(field, "schema", field)) for field in schema.schema}
+        step = english["config_subentries"]["profile"]["step"][step_id]
+        assert set(step["data"]) == fields
+        assert step["title"]
+        assert step["description"]
     assert set(english["entity"]) >= {"sensor", "button", "select"}
     assert "collection_override" in english["entity"]["select"]
     assert set(english["entity"]["select"]["collection_override"]["state"]) == {

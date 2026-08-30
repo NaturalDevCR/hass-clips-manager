@@ -70,6 +70,32 @@ def _profile_form(**overrides: object) -> dict[str, object]:
     return values
 
 
+async def _walk_profile_wizard(hass, entry, form, *, source="user", subentry_id=None):
+    """Advance the four-step profile wizard by submitting one step at a time.
+
+    The dropdown and blank-able optional fields submit their string values,
+    matching what the Home Assistant frontend sends for a select or text input.
+    """
+    context = {"source": source}
+    if subentry_id is not None:
+        context["subentry_id"] = subentry_id
+    result = await hass.config_entries.subentries.async_init(
+        (entry.entry_id, SUBENTRY_PROFILE), context=context
+    )
+    for _ in range(4):
+        data = {str(key.schema): form[str(key.schema)] for key in result["data_schema"].schema}
+        for name in (
+            "audio_channels",
+            "audio_sample_rate",
+            "video_bitrate_kbps",
+            "minimum_segment_duration_seconds",
+        ):
+            if name in data:
+                data[name] = str(data[name])
+        result = await hass.config_entries.subentries.async_configure(result["flow_id"], data)
+    return result
+
+
 class Client:
     """A minimal Worker client that records optimistic revision updates."""
 
@@ -356,11 +382,8 @@ async def test_profile_subentry_flow_creates_and_reports_worker_validation(
 ) -> None:
     entry = await _pair(hass, aioclient_mock, worker_health_payload)
     aioclient_mock.post("http://worker.local/api/v1/profiles", json={"revision": 1})
-    created = await hass.config_entries.subentries.async_init(
-        (entry.entry_id, SUBENTRY_PROFILE),
-        context={"source": "user"},
-        data=_profile_form(),
-    )
+    aioclient_mock.get("http://worker.local/api/v1/assets", json=[])
+    created = await _walk_profile_wizard(hass, entry, _profile_form())
     assert created["type"] == "create_entry"
     assert any(item.subentry_type == SUBENTRY_PROFILE for item in entry.subentries.values())
 
@@ -378,11 +401,7 @@ async def test_profile_subentry_flow_creates_and_reports_worker_validation(
     monkeypatch.setattr(
         subentries, "worker_client_for_entry", lambda *_args: RejectingProfileClient()
     )
-    invalid = await hass.config_entries.subentries.async_init(
-        (entry.entry_id, SUBENTRY_PROFILE),
-        context={"source": "user"},
-        data=_profile_form(profile_id="hd", name="HD"),
-    )
+    invalid = await _walk_profile_wizard(hass, entry, _profile_form(profile_id="hd", name="HD"))
     assert invalid["type"] == "form"
     assert invalid["errors"] == {"base": "worker_validation"}
 
@@ -393,21 +412,20 @@ async def test_profile_subentry_flow_reconfigures_with_optimistic_revision(
 ) -> None:
     entry = await _pair(hass, aioclient_mock, worker_health_payload)
     aioclient_mock.post("http://worker.local/api/v1/profiles", json={"revision": 1})
-    created = await hass.config_entries.subentries.async_init(
-        (entry.entry_id, SUBENTRY_PROFILE),
-        context={"source": "user"},
-        data=_profile_form(),
-    )
+    aioclient_mock.get("http://worker.local/api/v1/assets", json=[])
+    created = await _walk_profile_wizard(hass, entry, _profile_form())
     assert created["type"] == "create_entry"
     subentry = next(
         item for item in entry.subentries.values() if item.subentry_type == SUBENTRY_PROFILE
     )
     aioclient_mock.patch("http://worker.local/api/v1/profiles/4k", json={"revision": 2})
 
-    result = await hass.config_entries.subentries.async_init(
-        (entry.entry_id, SUBENTRY_PROFILE),
-        context={"source": "reconfigure", "subentry_id": subentry.subentry_id},
-        data=_profile_form(name="Cinema 4K"),
+    result = await _walk_profile_wizard(
+        hass,
+        entry,
+        _profile_form(name="Cinema 4K"),
+        source="reconfigure",
+        subentry_id=subentry.subentry_id,
     )
 
     assert result["type"] == "abort"

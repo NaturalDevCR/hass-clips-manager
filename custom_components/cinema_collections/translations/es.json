@@ -93,7 +93,9 @@
     "profile": {
       "title": "Perfil de procesamiento",
       "step": {
-        "user": {
+        "video": {
+          "title": "Video",
+          "description": "Identifica el perfil y configura la codificación, la calidad y el escalado del video.",
           "data": {
             "profile_id": "ID de perfil",
             "name": "Nombre",
@@ -111,7 +113,13 @@
             "video_scaling_strategy": "Estrategia de escala del video",
             "video_sar_num": "Relación de aspecto de píxeles (numerador)",
             "video_sar_den": "Relación de aspecto de píxeles (denominador)",
-            "video_fast_start": "Inicio rápido del video",
+            "video_fast_start": "Inicio rápido del video"
+          }
+        },
+        "audio": {
+          "title": "Audio",
+          "description": "Configura la codificación del audio y la normalización de sonoridad.",
+          "data": {
             "audio_codec": "Códec de audio",
             "audio_bitrate_kbps": "Tasa de bits del audio (kbps)",
             "audio_channels": "Canales de audio",
@@ -123,62 +131,30 @@
             "loudness_integrated_lufs": "Sonoridad integrada (LUFS)",
             "loudness_true_peak_dbtp": "Pico verdadero de sonoridad (dBTP)",
             "loudness_lra_lu": "Rango de sonoridad (LU)",
-            "loudness_final_mix_normalization": "Normalización de sonoridad de la mezcla final",
+            "loudness_final_mix_normalization": "Normalización de sonoridad de la mezcla final"
+          }
+        },
+        "timing": {
+          "title": "Intro, outro y temporización",
+          "description": "Define los recursos de intro y outro, los fundidos y la temporización de segmentos.",
+          "data": {
+            "intro_reference": "Nombre de archivo del recurso de intro",
+            "outro_reference": "Nombre de archivo del recurso de outro",
             "intro_to_clip_fade_seconds": "Fundido de intro a clip (segundos)",
             "clip_to_outro_fade_seconds": "Fundido de clip a outro (segundos)",
             "fade_in_seconds": "Fundido de entrada (segundos)",
             "fade_out_seconds": "Fundido de salida (segundos)",
-            "output_container": "Contenedor de salida",
-            "hardware_acceleration": "Aceleración por hardware",
-            "decode_error_policy": "Política de errores de decodificación",
-            "intro_reference": "Nombre de archivo del recurso de intro",
-            "outro_reference": "Nombre de archivo del recurso de outro",
-            "timeout_seconds": "Tiempo de espera por pasada (segundos)",
             "minimum_segment_duration_seconds": "Duración mínima de segmento (segundos)"
           }
         },
-        "reconfigure": {
+        "output": {
+          "title": "Salida y opciones avanzadas",
+          "description": "Define el contenedor de salida y las opciones de procesamiento avanzadas.",
           "data": {
-            "profile_id": "ID de perfil",
-            "name": "Nombre",
-            "video_width": "Ancho de video",
-            "video_height": "Alto de video",
-            "video_fps": "Fotogramas por segundo del video",
-            "video_codec": "Códec de video",
-            "video_preset": "Preajuste de video",
-            "video_quality_mode": "Modo de calidad de video",
-            "video_crf": "CRF del video",
-            "video_bitrate_kbps": "Tasa de bits del video (kbps)",
-            "video_h264_profile": "Perfil H.264 del video",
-            "video_level": "Nivel del video",
-            "video_pixel_format": "Formato de píxeles del video",
-            "video_scaling_strategy": "Estrategia de escala del video",
-            "video_sar_num": "Relación de aspecto de píxeles (numerador)",
-            "video_sar_den": "Relación de aspecto de píxeles (denominador)",
-            "video_fast_start": "Inicio rápido del video",
-            "audio_codec": "Códec de audio",
-            "audio_bitrate_kbps": "Tasa de bits del audio (kbps)",
-            "audio_channels": "Canales de audio",
-            "audio_sample_rate": "Frecuencia de muestreo del audio",
-            "audio_missing_policy": "Política de audio faltante",
-            "audio_fallback": "Audio de respaldo",
-            "audio_pad_or_trim": "Rellenar o recortar el audio a cada segmento",
-            "loudness_mode": "Modo de sonoridad",
-            "loudness_integrated_lufs": "Sonoridad integrada (LUFS)",
-            "loudness_true_peak_dbtp": "Pico verdadero de sonoridad (dBTP)",
-            "loudness_lra_lu": "Rango de sonoridad (LU)",
-            "loudness_final_mix_normalization": "Normalización de sonoridad de la mezcla final",
-            "intro_to_clip_fade_seconds": "Fundido de intro a clip (segundos)",
-            "clip_to_outro_fade_seconds": "Fundido de clip a outro (segundos)",
-            "fade_in_seconds": "Fundido de entrada (segundos)",
-            "fade_out_seconds": "Fundido de salida (segundos)",
             "output_container": "Contenedor de salida",
             "hardware_acceleration": "Aceleración por hardware",
             "decode_error_policy": "Política de errores de decodificación",
-            "intro_reference": "Nombre de archivo del recurso de intro",
-            "outro_reference": "Nombre de archivo del recurso de outro",
-            "timeout_seconds": "Tiempo de espera por pasada (segundos)",
-            "minimum_segment_duration_seconds": "Duración mínima de segmento (segundos)"
+            "timeout_seconds": "Tiempo de espera por pasada (segundos)"
           }
         }
       },
