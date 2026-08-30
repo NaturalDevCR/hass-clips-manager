@@ -225,15 +225,132 @@ def test_manager_page_renders_full_clip_row_actions(tmp_path: Path) -> None:
 
     html = client.get("/", headers={"X-Ingress-Path": "/api/hassio_ingress/session"}).text
 
-    assert 'data-action="trash"' in html
+    assert 'data-action="recompile"' in html
+    assert 'data-action="manage-toggle"' in html
+    assert 'aria-expanded="false"' in html
+    assert 'class="row-panel"' in html
+    assert "Move to trash" in html
+    assert "Permanently delete" in html
     assert 'class="trash-target"' in html
+    assert 'data-action="trash"' in html
+    assert 'class="delete-target"' in html
+    assert 'data-action="delete"' in html
     assert 'data-action="edit-toggle"' in html
     assert 'data-action="move-toggle"' in html
-    assert 'data-action="delete"' in html
     assert 'class="row-form edit-form"' in html
     assert 'class="row-form move-form"' in html
     assert 'id="directory-form"' in html
     assert 'id="trash-table"' in html
+
+
+def test_manager_page_renders_five_tabs_and_their_panels(tmp_path: Path) -> None:
+    client = TestClient(_app(tmp_path))
+    _manager_session(client)
+
+    html = client.get("/", headers={"X-Ingress-Path": "/api/hassio_ingress/session"}).text
+
+    assert 'role="tablist"' in html
+    assert html.count(' role="tab" ') == 5
+    assert html.count(' role="tabpanel" ') == 5
+    for panel, tab in [
+        ("panel-library", "Library"),
+        ("panel-add", "Add clips"),
+        ("panel-assets", "Assets"),
+        ("panel-maintenance", "Maintenance"),
+        ("panel-diagnostics", "Diagnostics"),
+    ]:
+        short = panel.removeprefix("panel-")
+        assert f'id="{panel}"' in html
+        assert f'id="tab-{short}"' in html
+        assert f'aria-controls="{panel}"' in html
+        assert f'aria-labelledby="tab-{short}"' in html
+        assert f'data-panel="{short}"' in html
+        assert f'<button type="button" role="tab" id="tab-{short}"' in html
+        assert tab in html
+    assert 'aria-selected="true"' in html
+    assert "sessionStorage" in html
+
+
+def test_manager_clip_row_manage_panel_labels_targets_and_actions(tmp_path: Path) -> None:
+    client = TestClient(_app(tmp_path))
+    _seed_collection(client)
+    csrf = _manager_session(client)
+    headers = {"X-CSRF-Token": csrf}
+    client.post(
+        "/manager/upload?collection_id=films",
+        headers={**headers, "X-Filename": "clip.mp4"},
+        content=b"clip",
+    )
+
+    html = client.get("/", headers={"X-Ingress-Path": "/api/hassio_ingress/session"}).text
+
+    assert 'data-action="manage-toggle"' in html
+    assert 'aria-expanded="false"' in html
+    assert 'class="row-panel"' in html
+    assert 'class="row-panel" hidden' in html
+    assert 'class="panel-label">Move to trash</span>' in html
+    assert 'class="panel-label">Permanently delete</span>' in html
+    assert 'class="trash-target"' in html
+    assert 'class="delete-target"' in html
+    assert 'data-action="trash"' in html
+    assert 'data-action="delete"' in html
+
+
+def test_manager_clip_row_keeps_clip_id_discoverable(tmp_path: Path) -> None:
+    client = TestClient(_app(tmp_path))
+    _seed_collection(client)
+    csrf = _manager_session(client)
+    headers = {"X-CSRF-Token": csrf}
+    uploaded = client.post(
+        "/manager/upload?collection_id=films",
+        headers={**headers, "X-Filename": "clip.mp4"},
+        content=b"clip",
+    )
+    assert uploaded.status_code == 201
+    clip_id = uploaded.json()["id"]
+
+    html = client.get("/", headers={"X-Ingress-Path": "/api/hassio_ingress/session"}).text
+
+    assert html.count(f'data-clip-id="{clip_id}"') == 1
+    assert f'title="{clip_id}"' in html
+
+
+def test_manager_page_table_headers_omit_clip_id_column(tmp_path: Path) -> None:
+    client = TestClient(_app(tmp_path))
+    _seed_collection(client)
+    _manager_session(client)
+    with client.app.state.database.connection:
+        client.app.state.database.connection.execute(
+            "INSERT INTO clips(id,collection_id,state,relative_source_path,relative_output_path,"
+            "duration_seconds,output_available,metadata,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
+            (
+                "33333333-3333-3333-3333-333333333333",
+                "films",
+                "ready",
+                "films/feature.mp4",
+                "films/33333333-3333-3333-3333-333333333333.mp4",
+                90.0,
+                1,
+                '{"tags": ["dawn"]}',
+                "2026-01-01T00:00:00+00:00",
+            ),
+        )
+
+    html = client.get("/", headers={"X-Ingress-Path": "/api/hassio_ingress/session"}).text
+
+    assert "<th>Clip ID</th>" not in html
+    assert (
+        "<th>Collection</th><th>Source</th><th>State</th><th>Output</th>"
+        "<th>Duration</th><th>Tags</th><th>Actions</th>" in html
+    )
+    assert "<td>films</td>" in html
+    assert "feature.mp4" in html
+    assert 'title="films/feature.mp4"' in html
+    assert "<td>ready</td>" in html
+    assert "33333333-3333-3333-3333-333333333333.mp4" in html
+    assert 'title="films/33333333-3333-3333-3333-333333333333.mp4"' in html
+    assert "<td>1:30</td>" in html
+    assert "<td>dawn</td>" in html
 
 
 def test_manager_routes_complete_exact_clip_lifecycle(tmp_path: Path) -> None:

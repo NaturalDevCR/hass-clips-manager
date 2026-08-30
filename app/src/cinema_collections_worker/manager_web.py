@@ -114,10 +114,18 @@ def _render_clip_row(row: Any) -> str:
     tags = ", ".join(metadata.get("tags") or [])
     notes = str(metadata.get("notes") or "")
     state = str(row["state"])
-    output_value = row["relative_output_path"] or ""
-    output_cell = (
-        html.escape(str(output_value), quote=True) if bool(row["output_available"]) else "—"
-    )
+    source_value = str(row["relative_source_path"] or "")
+    source_name = source_value.rsplit("/", 1)[-1] if source_value else ""
+    output_value = str(row["relative_output_path"] or "")
+    output_available = bool(row["output_available"])
+    output_name = output_value.rsplit("/", 1)[-1] if output_value else ""
+    if output_available and output_value:
+        output_cell = (
+            f'<td title="{html.escape(output_value, quote=True)}">'
+            f"{html.escape(output_name, quote=True)}</td>"
+        )
+    else:
+        output_cell = "<td>—</td>"
     duration_seconds = float(row["duration_seconds"] or 0)
     duration_cell = _format_duration(duration_seconds) if duration_seconds > 0 else "—"
     failure = ""
@@ -128,41 +136,53 @@ def _render_clip_row(row: Any) -> str:
     target_option = (
         '<option value="source">Source</option><option value="output">Output</option>'
         '<option value="both">Both</option>'
-        if bool(row["output_available"])
+        if output_available
         else '<option value="source">Source</option>'
     )
     return (
-        '<tr data-clip-id="{id}" data-output-path="{output}">'
-        "<td>{collection}</td><td>{source}{failure}</td><td>{state}</td><td><code>{id}</code></td>"
-        "<td>{output_cell}</td><td>{duration_cell}</td><td>{tags}</td>"
+        '<tr data-clip-id="{id}" data-output-path="{output}" title="{id}">'
+        "<td>{collection}</td>"
+        '<td title="{source_path}">{source_name}{failure}</td>'
+        "<td>{state}</td>"
+        "{output_cell}"
+        "<td>{duration_cell}</td><td>{tags}</td>"
         '<td class="actions">'
-        '<button data-action="scan">Scan</button> '
         '<button data-action="recompile">Recompile</button> '
+        '<button data-action="manage-toggle" aria-expanded="false">Manage</button>'
+        '<div class="row-panel" hidden>'
+        '<div class="panel-group"><span class="panel-label">Re-scan the source file</span>'
+        '<button data-action="scan">Scan</button></div>'
+        '<div class="panel-group"><span class="panel-label">Move to trash</span>'
         '<select class="trash-target" title="Trash target">{targets}</select> '
-        '<button data-action="trash">Trash</button> '
+        '<button data-action="trash">Trash</button></div>'
+        '<div class="panel-group"><span class="panel-label">Permanently delete</span>'
         '<select class="delete-target" title="Delete target">{targets}</select> '
-        '<button data-action="delete">Delete</button> '
+        '<button data-action="delete">Delete</button></div>'
+        '<div class="panel-group"><span class="panel-label">Edit metadata</span>'
         '<button data-action="edit-toggle">Edit</button> '
-        '<button data-action="move-toggle">Move</button>'
         '<form class="row-form edit-form" hidden>'
         '<input name="tags" value="{tags}" placeholder="tags, comma, separated">'
         '<textarea name="notes" placeholder="Notes">{notes}</textarea>'
-        '<button type="submit">Save</button></form>'
+        '<button type="submit">Save</button></form></div>'
+        '<div class="panel-group"><span class="panel-label">Move the source file</span>'
+        '<button data-action="move-toggle">Move</button> '
         '<form class="row-form move-form" hidden>'
         '<input name="destination" value="{source}" required>'
-        '<button type="submit">Move</button></form>'
-        "</td></tr>".format(
+        '<button type="submit">Move</button></form></div>'
+        "</div></td></tr>".format(
             id=html.escape(str(row["id"]), quote=True),
             collection=html.escape(str(row["collection_id"])),
-            source=html.escape(str(row["relative_source_path"]), quote=True),
+            source_path=html.escape(source_value, quote=True),
+            source_name=html.escape(source_name, quote=True),
             failure=failure,
             state=html.escape(state),
-            output=html.escape(str(output_value), quote=True),
+            output=html.escape(output_value, quote=True),
             output_cell=output_cell,
             duration_cell=duration_cell,
             tags=html.escape(tags, quote=True),
             notes=html.escape(notes),
             targets=target_option,
+            source=html.escape(source_value, quote=True),
         )
     )
 
@@ -176,7 +196,7 @@ def _render_manager(request: Request, csrf: str) -> str:
     ).fetchall()
     clip_rows = (
         "".join(_render_clip_row(row) for row in rows)
-        or '<tr><td colspan="8">No catalogued clips yet.</td></tr>'
+        or '<tr><td colspan="7">No catalogued clips yet.</td></tr>'
     )
     template = (
         Path(__file__).with_name("templates").joinpath("manager.html").read_text(encoding="utf-8")

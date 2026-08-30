@@ -11,90 +11,112 @@
     <main>
       <h1>Cinema Collections Library Manager</h1>
       <p>Files are managed through their catalog record. Source and compiled output are always selected separately.</p>
-      <section>
-        <h2>Import source clips</h2>
-        <form id="upload-form">
-          <label>Collection <input name="collection" required></label>
-          <label>Video(s) <input name="file" type="file" accept="video/*" multiple required></label>
-          <button type="submit">Upload</button>
-        </form>
-        <p class="field-hint">Large files are sent in chunks, so they pass through
-          reverse proxies that limit request size. To skip uploading entirely,
-          copy the files into the collection's source folder and use
-          "Scan for files already on disk" below instead.</p>
-        <div id="upload-progress" class="upload-progress" hidden>
-          <div class="upload-progress-bar"><div id="upload-progress-fill" class="upload-progress-fill"></div></div>
-          <p id="upload-progress-label" class="upload-progress-label"></p>
-        </div>
-        <p id="result" role="status"></p>
-      </section>
-      <section>
-        <h2>Scan for files already on disk</h2>
-        <p>If your clips are already inside a collection's configured source folder
-          (copied there directly, over Samba, or with the Home Assistant Files
-          add-on), scan instead of uploading them again.</p>
-        <form id="scan-form">
-          <label>Collection ID <input name="collection" placeholder="e.g. regular — leave empty for every collection"></label>
-          <button type="submit">Scan library</button>
-        </form>
-        <p class="field-hint">Use the collection's short ID (shown in the Collection column below), not a folder path.</p>
-        <p id="scan-result" role="status"></p>
-      </section>
-      <section>
-        <h2>Create a collection folder</h2>
-        <form id="directory-form">
-          <label>Collection ID <input name="collection" required placeholder="e.g. regular"></label>
-          <label>Folder <input name="path" required placeholder="e.g. organized"></label>
-          <button type="submit">Create folder</button>
-        </form>
-        <p class="field-hint">Creates an empty folder inside the collection's configured source directory.</p>
-        <p id="directory-result" role="status"></p>
-      </section>
-      <section>
-        <h2>Intro/outro assets</h2>
-        <p>Intro and outro files live in the Worker's private assets storage. Upload them
-          here, then reference the exact filename shown below in the processing profile's
-          intro/outro fields.</p>
-        <form id="asset-upload-form">
-          <label>Video <input name="file" type="file" accept="video/*" required></label>
-          <button type="submit">Upload asset</button>
-        </form>
-        <div id="asset-progress" class="upload-progress" hidden>
-          <div class="upload-progress-bar"><div id="asset-progress-fill" class="upload-progress-fill"></div></div>
-          <p id="asset-progress-label" class="upload-progress-label"></p>
-        </div>
-        <p id="asset-result" role="status"></p>
-        <ul id="asset-list"></ul>
-      </section>
-      <table>
-        <thead><tr><th>Collection</th><th>Source</th><th>State</th><th>Clip ID</th><th>Output</th><th>Duration</th><th>Tags</th><th>Actions</th></tr></thead>
-        <tbody>{{ clip_rows }}</tbody>
-      </table>
-      <section>
-        <h2>Trash</h2>
-        <table id="trash-table">
-          <thead><tr><th>Clip ID</th><th>Target</th><th>Trashed at</th><th></th></tr></thead>
-          <tbody><tr><td colspan="4">Trash is empty.</td></tr></tbody>
-        </table>
-      </section>
-      <section>
-        <h2>Recent jobs</h2>
-        <table id="jobs-table">
-          <thead><tr><th>Job</th><th>Kind</th><th>State</th><th>Created</th><th>Finished</th><th>Error</th></tr></thead>
-          <tbody><tr><td colspan="6">No jobs yet.</td></tr></tbody>
-        </table>
-        <p class="field-hint">The most recent 50 jobs, newest first.</p>
-        <button type="button" id="jobs-refresh" class="section-refresh">Refresh</button>
-      </section>
-      <section>
-        <h2>Worker log</h2>
-        <table id="log-table">
-          <thead><tr><th>Timestamp</th><th>Level</th><th>Message</th></tr></thead>
-          <tbody><tr><td colspan="3">No log entries yet.</td></tr></tbody>
-        </table>
-        <p class="field-hint">The most recent 200 entries, newest first.</p>
-        <button type="button" id="log-refresh" class="section-refresh">Refresh</button>
-      </section>
+      <div class="tablist" role="tablist" aria-label="Library Manager sections">
+        <button type="button" role="tab" id="tab-library" aria-controls="panel-library" aria-selected="true" data-tab="library">Library</button>
+        <button type="button" role="tab" id="tab-add" aria-controls="panel-add" aria-selected="false" data-tab="add">Add clips</button>
+        <button type="button" role="tab" id="tab-assets" aria-controls="panel-assets" aria-selected="false" data-tab="assets">Assets</button>
+        <button type="button" role="tab" id="tab-maintenance" aria-controls="panel-maintenance" aria-selected="false" data-tab="maintenance">Maintenance</button>
+        <button type="button" role="tab" id="tab-diagnostics" aria-controls="panel-diagnostics" aria-selected="false" data-tab="diagnostics">Diagnostics</button>
+      </div>
+      <p id="result" role="status"></p>
+      <div role="tabpanel" id="panel-library" aria-labelledby="tab-library" data-panel="library">
+        <section>
+          <h2>Library</h2>
+          <div class="table-scroll">
+            <table id="clips-table">
+              <thead><tr><th>Collection</th><th>Source</th><th>State</th><th>Output</th><th>Duration</th><th>Tags</th><th>Actions</th></tr></thead>
+              <tbody>{{ clip_rows }}</tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+      <div role="tabpanel" id="panel-add" aria-labelledby="tab-add" data-panel="add" hidden>
+        <section>
+          <h2>Import source clips</h2>
+          <form id="upload-form">
+            <label>Collection <input name="collection" required></label>
+            <label>Video(s) <input name="file" type="file" accept="video/*" multiple required></label>
+            <button type="submit">Upload</button>
+          </form>
+          <p class="field-hint">Large files are sent in chunks, so they pass through
+            reverse proxies that limit request size. To skip uploading entirely,
+            copy the files into the collection's source folder and use
+            "Scan for files already on disk" below instead.</p>
+          <div id="upload-progress" class="upload-progress" hidden>
+            <div class="upload-progress-bar"><div id="upload-progress-fill" class="upload-progress-fill"></div></div>
+            <p id="upload-progress-label" class="upload-progress-label"></p>
+          </div>
+        </section>
+        <section>
+          <h2>Scan for files already on disk</h2>
+          <p>If your clips are already inside a collection's configured source folder
+            (copied there directly, over Samba, or with the Home Assistant Files
+            add-on), scan instead of uploading them again.</p>
+          <form id="scan-form">
+            <label>Collection ID <input name="collection" placeholder="e.g. regular — leave empty for every collection"></label>
+            <button type="submit">Scan library</button>
+          </form>
+          <p class="field-hint">Use the collection's short ID (shown in the Collection column below), not a folder path.</p>
+          <p id="scan-result" role="status"></p>
+        </section>
+      </div>
+      <div role="tabpanel" id="panel-assets" aria-labelledby="tab-assets" data-panel="assets" hidden>
+        <section>
+          <h2>Intro/outro assets</h2>
+          <p>Intro and outro files live in the Worker's private assets storage. Upload them
+            here, then reference the exact filename shown below in the processing profile's
+            intro/outro fields.</p>
+          <form id="asset-upload-form">
+            <label>Video <input name="file" type="file" accept="video/*" required></label>
+            <button type="submit">Upload asset</button>
+          </form>
+          <div id="asset-progress" class="upload-progress" hidden>
+            <div class="upload-progress-bar"><div id="asset-progress-fill" class="upload-progress-fill"></div></div>
+            <p id="asset-progress-label" class="upload-progress-label"></p>
+          </div>
+          <p id="asset-result" role="status"></p>
+          <ul id="asset-list"></ul>
+        </section>
+      </div>
+      <div role="tabpanel" id="panel-maintenance" aria-labelledby="tab-maintenance" data-panel="maintenance" hidden>
+        <section>
+          <h2>Create a collection folder</h2>
+          <form id="directory-form">
+            <label>Collection ID <input name="collection" required placeholder="e.g. regular"></label>
+            <label>Folder <input name="path" required placeholder="e.g. organized"></label>
+            <button type="submit">Create folder</button>
+          </form>
+          <p class="field-hint">Creates an empty folder inside the collection's configured source directory.</p>
+          <p id="directory-result" role="status"></p>
+        </section>
+        <section>
+          <h2>Trash</h2>
+          <table id="trash-table">
+            <thead><tr><th>Clip</th><th>Target</th><th>Trashed at</th><th></th></tr></thead>
+            <tbody><tr><td colspan="4">Trash is empty.</td></tr></tbody>
+          </table>
+        </section>
+      </div>
+      <div role="tabpanel" id="panel-diagnostics" aria-labelledby="tab-diagnostics" data-panel="diagnostics" hidden>
+        <section>
+          <h2>Recent jobs</h2>
+          <table id="jobs-table">
+            <thead><tr><th>Job</th><th>Kind</th><th>State</th><th>Created</th><th>Finished</th><th>Error</th></tr></thead>
+            <tbody><tr><td colspan="6">No jobs yet.</td></tr></tbody>
+          </table>
+          <p class="field-hint">The most recent 50 jobs, newest first.</p>
+          <button type="button" id="jobs-refresh" class="section-refresh">Refresh</button>
+        </section>
+        <section>
+          <h2>Worker log</h2>
+          <table id="log-table">
+            <thead><tr><th>Timestamp</th><th>Level</th><th>Message</th></tr></thead>
+            <tbody><tr><td colspan="3">No log entries yet.</td></tr></tbody>
+          </table>
+          <p class="field-hint">The most recent 200 entries, newest first.</p>
+          <button type="button" id="log-refresh" class="section-refresh">Refresh</button>
+        </section>
+      </div>
     </main>
     <script>
       window.managerCsrf = document.querySelector('meta[name="csrf-token"]').content;
@@ -102,6 +124,49 @@
       const progressWrap = document.getElementById('upload-progress');
       const progressFill = document.getElementById('upload-progress-fill');
       const progressLabel = document.getElementById('upload-progress-label');
+
+      // Five tab groups, one panel per group. Only the active panel is shown;
+      // the selection is remembered in sessionStorage so location.reload()
+      // after an action returns to the tab that was in use.
+      const tabPanels = new Map(
+        Array.from(document.querySelectorAll('[role="tabpanel"]')).map(panel => [panel.dataset.panel, panel])
+      );
+      const tabButtons = Array.from(document.querySelectorAll('[role="tab"]'));
+
+      function activateTab(name) {
+        tabButtons.forEach(tab => {
+          const active = tab.dataset.tab === name;
+          tab.setAttribute('aria-selected', active ? 'true' : 'false');
+          tab.tabIndex = active ? 0 : -1;
+        });
+        tabPanels.forEach((panel, panelName) => {
+          panel.hidden = panelName !== name;
+        });
+        try { sessionStorage.setItem('manager-tab', name); } catch { /* storage may be unavailable */ }
+      }
+
+      tabButtons.forEach(tab => {
+        tab.addEventListener('click', () => activateTab(tab.dataset.tab));
+        tab.addEventListener('keydown', event => {
+          const index = tabButtons.indexOf(tab);
+          let nextIndex = -1;
+          if (event.key === 'ArrowRight') nextIndex = (index + 1) % tabButtons.length;
+          else if (event.key === 'ArrowLeft') nextIndex = (index - 1 + tabButtons.length) % tabButtons.length;
+          else if (event.key === 'Home') nextIndex = 0;
+          else if (event.key === 'End') nextIndex = tabButtons.length - 1;
+          if (nextIndex < 0) return;
+          event.preventDefault();
+          tabButtons[nextIndex].focus();
+          activateTab(tabButtons[nextIndex].dataset.tab);
+        });
+      });
+
+      let initialTab = 'library';
+      try {
+        const remembered = sessionStorage.getItem('manager-tab');
+        if (remembered && tabPanels.has(remembered)) initialTab = remembered;
+      } catch { /* storage may be unavailable */ }
+      activateTab(initialTab);
 
       async function act(url, options = {}) {
         options.headers = {...(options.headers || {}), 'X-CSRF-Token': window.managerCsrf};
@@ -265,7 +330,10 @@
         const target = row.querySelector('.delete-target').value;
         try {
           const info = await act(`manager/clips/${id}/delete-confirmation?target=${target}`);
-          const sourcePath = row.querySelector('td:nth-child(2)').textContent;
+          const sourceCell = row.querySelector('td:nth-child(2)');
+          const sourcePath = sourceCell && sourceCell.getAttribute('title')
+            ? sourceCell.getAttribute('title')
+            : sourceCell.textContent;
           const outputPath = row.dataset.outputPath || '(no compiled output)';
           const affected = target === 'source'
             ? `Source: ${sourcePath}`
@@ -286,6 +354,12 @@
         const row = button.closest('[data-clip-id]');
         const id = row.dataset.clipId;
         const action = button.dataset.action;
+        if (action === 'manage-toggle') {
+          const panel = row.querySelector('.row-panel');
+          panel.hidden = !panel.hidden;
+          button.setAttribute('aria-expanded', panel.hidden ? 'false' : 'true');
+          return;
+        }
         if (action === 'edit-toggle' || action === 'move-toggle') {
           const form = row.querySelector(action === 'edit-toggle' ? '.edit-form' : '.move-form');
           form.hidden = !form.hidden;
@@ -394,7 +468,11 @@
         entries.forEach(entry => {
           const id = entry.id;
           const row = document.createElement('tr');
-          [entry.clip_id, entry.target, entry.created_at].forEach(value => {
+          const idCell = document.createElement('td');
+          idCell.textContent = entry.clip_id.slice(0, 8);
+          idCell.title = entry.clip_id;
+          row.appendChild(idCell);
+          [entry.target, entry.created_at].forEach(value => {
             const cell = document.createElement('td');
             cell.textContent = value;
             row.appendChild(cell);
