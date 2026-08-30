@@ -118,11 +118,12 @@ def _render_clip_row(row: Any) -> str:
     source_name = source_value.rsplit("/", 1)[-1] if source_value else ""
     output_value = str(row["relative_output_path"] or "")
     output_available = bool(row["output_available"])
-    output_name = output_value.rsplit("/", 1)[-1] if output_value else ""
     if output_available and output_value:
+        # Compiled outputs are named after the clip UUID, so the filename itself
+        # tells a reader nothing and only crowds the row. Report availability and
+        # keep the exact path reachable through the cell's tooltip.
         output_cell = (
-            f'<td title="{html.escape(output_value, quote=True)}">'
-            f"{html.escape(output_name, quote=True)}</td>"
+            f'<td class="output-ready" title="{html.escape(output_value, quote=True)}">Ready</td>'
         )
     else:
         output_cell = "<td>—</td>"

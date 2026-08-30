@@ -316,10 +316,18 @@ td.actions button[data-action="delete"] {
 .row-panel {
   flex-basis: 100%;
   display: grid;
-  gap: 0.85rem;
+  /* Lay the groups out side by side instead of stacking them in the narrow
+     actions column; the surrounding .table-scroll handles any overflow. */
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  min-width: 30rem;
+  gap: 0.85rem 1.25rem;
   padding-top: 0.85rem;
   margin-top: 0.35rem;
   border-top: 1px solid var(--border);
+}
+
+.row-panel .panel-group {
+  align-content: start;
 }
 
 .row-panel[hidden] { display: none; }
