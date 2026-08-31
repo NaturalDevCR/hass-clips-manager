@@ -50,7 +50,7 @@ from .repositories import (
 )
 from .settings import WorkerSettings
 
-WORKER_VERSION = "1.4.0"
+WORKER_VERSION = "1.4.1"
 API_VERSION = "1.0.0"
 MIN_CLIENT_VERSION = "1.0.0"
 MAX_CLIENT_VERSION = "1.x"
