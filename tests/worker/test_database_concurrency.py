@@ -89,16 +89,28 @@ def test_close_after_thread_churn(tmp_path) -> None:
 
 @pytest.mark.skipif(not Path("/proc/self/fd").exists(), reason="requires procfs")
 def test_dead_threads_do_not_leak_file_descriptors(tmp_path) -> None:
+    """Descriptor use must plateau across repeated churn rather than climb.
+
+    An absolute ceiling relative to the first measurement is not a usable
+    assertion here: the interpreter's own threading machinery claims a number
+    of descriptors as it warms up, independently of this database. The failure
+    this guards against — a connection pinned per retired thread — shows up as
+    growth that never stops, so the discriminating check is that two later
+    rounds of identical work claim nothing further.
+    """
+
     def open_fd_count() -> int:
         return len(list(Path("/proc/self/fd").iterdir()))
 
     db = Database.create(str(tmp_path / "worker.sqlite3"))
     _ = db.connection
-    gc.collect()
-    baseline = open_fd_count()
+
+    # Warm up until the interpreter's own per-thread allocations settle.
+    for _ in range(3):
+        _churn(db, 30)
+    settled = open_fd_count()
 
     _churn(db, 30)
 
-    # WAL mode holds several descriptors per connection; released connections
-    # must return them to the process.
-    assert open_fd_count() <= baseline + 3
+    assert open_fd_count() <= settled
+    assert len(db._connections) == 1
