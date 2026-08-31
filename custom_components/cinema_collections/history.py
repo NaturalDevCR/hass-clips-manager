@@ -14,7 +14,7 @@ from homeassistant.helpers.event import async_track_time_change
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
-from .const import DOMAIN
+from .const import DOMAIN, HistoryResetMode
 
 _STORAGE_VERSION = 1
 _STORAGE_KEY = f"{DOMAIN}.playback_history"
@@ -49,11 +49,13 @@ class PlaybackHistoryStore:
         now: Callable[[], datetime] = dt_util.now,
         chooser: Callable[[tuple[str, ...]], str] | None = None,
         reset_time: time = time(0, 0),
+        reset_mode: HistoryResetMode = HistoryResetMode.ON_EXHAUSTION,
     ) -> None:
         self._hass = hass
         self._now = now
         self._chooser = chooser or SystemRandom().choice
         self._reset_time = reset_time
+        self._reset_mode = reset_mode
         self._store: Store[dict[str, Any]] = Store(
             hass, _STORAGE_VERSION, storage_key, atomic_writes=True
         )
@@ -63,7 +65,7 @@ class PlaybackHistoryStore:
         self._cancel_daily_reset: Callable[[], None] | None = None
 
     async def async_setup(self, *, reconcile: bool = True) -> ResetResult:
-        """Load history, reconcile a missed local reset, and schedule midnight resets."""
+        """Load history and, in daily mode, reconcile and schedule the local reset."""
         async with self._lock:
             if self._initialized:
                 return ResetResult((), self._local_now())
@@ -74,7 +76,11 @@ class PlaybackHistoryStore:
             reset_ids = self._reconcile(now) if reconcile else ()
             if reset_ids:
                 await self._store.async_save(self._serialized())
-            if getattr(self._hass, "bus", None) is not None and self._cancel_daily_reset is None:
+            if (
+                self._reset_mode is HistoryResetMode.DAILY
+                and getattr(self._hass, "bus", None) is not None
+                and self._cancel_daily_reset is None
+            ):
                 self._cancel_daily_reset = async_track_time_change(
                     self._hass,
                     self._async_daily_reset,
@@ -171,7 +177,7 @@ class PlaybackHistoryStore:
             return ResetResult(reset_ids, now)
 
     async def async_handle_daily_reset(self, now: datetime) -> ResetResult:
-        """Run the registered local-midnight reconciliation for a supplied timestamp."""
+        """Run the daily reconciliation for a supplied timestamp; inert outside daily mode."""
         if now.tzinfo is None:
             raise ValueError("daily playback reset requires a timezone-aware timestamp")
         await self.async_setup()
@@ -263,6 +269,8 @@ class PlaybackHistoryStore:
     def _reconcile(
         self, now: datetime, data: dict[str, dict[str, dict[str, Any]]] | None = None
     ) -> tuple[str, ...]:
+        if self._reset_mode is not HistoryResetMode.DAILY:
+            return ()
         target = self._data if data is None else data
         expected_period = self._period_start(now)
         collections = target["collections"]

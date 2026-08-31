@@ -247,6 +247,68 @@ async def test_options_flow_persists_explicit_override(
     assert result["type"] == "create_entry"
     assert entry.options[CONF_OVERRIDE_MODE] == "explicit"
     assert entry.options[CONF_OVERRIDE_COLLECTION_ID] == "films"
+    assert entry.options["history_reset_mode"] == "on_exhaustion"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("mode", "reset_time"),
+    [("on_exhaustion", "01:30"), ("daily", "02:00")],
+)
+async def test_options_flow_persists_both_history_reset_modes(
+    hass, aioclient_mock, worker_health_payload, mode, reset_time
+) -> None:
+    aioclient_mock.get("http://worker.local/api/v1/health", json=worker_health_payload)
+    paired = await hass.config_entries.flow.async_init(
+        DOMAIN,
+        context={"source": "user"},
+        data={CONF_ENDPOINT: "http://worker.local", CONF_TOKEN: "pairing-token"},
+    )
+    assert paired["type"] == "create_entry"
+    entry = hass.config_entries.async_entries(DOMAIN)[0]
+
+    result = await hass.config_entries.options.async_init(
+        entry.entry_id,
+        data={
+            CONF_OVERRIDE_MODE: "automatic",
+            CONF_OVERRIDE_COLLECTION_ID: "",
+            "history_reset_mode": mode,
+            "history_reset_time": reset_time,
+            "sync_on_startup": True,
+        },
+    )
+
+    assert result["type"] == "create_entry"
+    assert entry.options["history_reset_mode"] == mode
+    assert entry.options["history_reset_time"] == reset_time
+
+
+def test_options_schema_is_serializable_for_the_frontend() -> None:
+    """voluptuous_serialize converts every field type the options schema can carry.
+
+    The real HTTP config-entries endpoint serializes the flow's data_schema
+    with voluptuous_serialize before a submission-based test would ever
+    exercise it; a construct it can't convert (for example a selector that
+    lacks a custom serializer) surfaces as a bare 500 in a real Home Assistant
+    instance instead of a caught flow error.
+    """
+    import voluptuous_serialize
+    from homeassistant.helpers import config_validation as cv
+
+    from custom_components.cinema_collections.options_flow import _options_schema
+
+    for defaults in ({}, {"history_reset_mode": "daily", "history_reset_time": "06:00"}):
+        fields = voluptuous_serialize.convert(
+            _options_schema(defaults), custom_serializer=cv.custom_serializer
+        )
+        assert isinstance(fields, list) and fields
+        assert {field["name"] for field in fields} >= {
+            "override_mode",
+            "override_collection_id",
+            "history_reset_mode",
+            "history_reset_time",
+            "sync_on_startup",
+        }
 
 
 async def _pair(hass, aioclient_mock, worker_health_payload):

@@ -15,13 +15,16 @@ from homeassistant.helpers.event import async_track_time_change
 from .api_client import WorkerApiClient, WorkerApiError
 from .const import (
     CONF_ENDPOINT,
+    CONF_HISTORY_RESET_MODE,
     CONF_HISTORY_RESET_TIME,
     CONF_SYNC_ON_STARTUP,
     CONF_TOKEN,
+    DEFAULT_HISTORY_RESET_MODE,
     DEFAULT_HISTORY_RESET_TIME,
     DEFAULT_SYNC_ON_STARTUP,
     DOMAIN,
     PLATFORMS,
+    HistoryResetMode,
 )
 from .coordinator import CinemaCollectionsCoordinator, override_for_entry, policies_for_entry
 from .history import PlaybackHistoryStore
@@ -93,10 +96,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             )
         except (AttributeError, TypeError, ValueError):
             reset_time = time(0, 0)
+        try:
+            reset_mode = HistoryResetMode(
+                str(entry.options.get(CONF_HISTORY_RESET_MODE, DEFAULT_HISTORY_RESET_MODE))
+            )
+        except (AttributeError, TypeError, ValueError):
+            reset_mode = HistoryResetMode.ON_EXHAUSTION
         history = PlaybackHistoryStore(
             hass,
             storage_key=f"{DOMAIN}.{entry.entry_id}.playback_history",
             reset_time=reset_time,
+            reset_mode=reset_mode,
         )
         await history.async_setup()
     coordinator = CinemaCollectionsCoordinator(

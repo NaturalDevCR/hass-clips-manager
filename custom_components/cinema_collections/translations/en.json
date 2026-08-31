@@ -29,7 +29,8 @@
         "data": {
           "override_mode": "Selection mode",
           "override_collection_id": "Collection for explicit mode",
-          "history_reset_time": "Daily history reset time",
+          "history_reset_mode": "History reset mode",
+          "history_reset_time": "Daily history reset time (daily mode only)",
           "sync_on_startup": "Synchronize configuration on startup"
         }
       }
@@ -277,6 +278,12 @@
         "automatic": "Automatic",
         "default": "Default collection",
         "explicit": "Explicit collection"
+      }
+    },
+    "history_reset_mode": {
+      "options": {
+        "on_exhaustion": "On exhaustion",
+        "daily": "Daily"
       }
     },
     "compile_strategy": {

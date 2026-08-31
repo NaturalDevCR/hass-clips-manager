@@ -29,7 +29,8 @@
         "data": {
           "override_mode": "Modo de selección",
           "override_collection_id": "Colección para el modo explícito",
-          "history_reset_time": "Hora diaria de reinicio del historial",
+          "history_reset_mode": "Modo de reinicio del historial",
+          "history_reset_time": "Hora diaria de reinicio del historial (solo en modo diario)",
           "sync_on_startup": "Sincronizar configuración al iniciar"
         }
       }
@@ -277,6 +278,12 @@
         "automatic": "Automático",
         "default": "Colección predeterminada",
         "explicit": "Colección explícita"
+      }
+    },
+    "history_reset_mode": {
+      "options": {
+        "on_exhaustion": "Al agotarse",
+        "daily": "Diario"
       }
     },
     "compile_strategy": {

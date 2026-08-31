@@ -36,9 +36,16 @@ The global **Options** flow exposes collection-selection policy without YAML:
 - `override_mode` (**Selection mode**) — `automatic`, `default`, or `explicit`.
 - `override_collection_id` (**Collection for explicit mode**) — required only
   when `override_mode` is `explicit`.
+- `history_reset_mode` (**History reset mode**) — `on_exhaustion` (default) or
+  `daily`. In `on_exhaustion` mode a collection's no-repeat history only rolls
+  over once every eligible clip in it has been played; there is no time-based
+  wipe. In `daily` mode that exhaustion rollover still applies, and every
+  collection's history is additionally wiped at `history_reset_time` each local
+  day. A manual reset (the `reset_history` service or button) works in both
+  modes.
 - `history_reset_time` (**Daily history reset time**) — the local time at which
   every collection's no-repeat playback history resets; default `00:00`,
-  minute precision only.
+  minute precision only. Applies only when `history_reset_mode` is `daily`.
 - `sync_on_startup` (**Synchronize configuration on startup**) — whether local
   subentry revisions are re-synchronized to the Worker at startup; default
   enabled.

@@ -48,7 +48,11 @@ created by your own Home Assistant instance.
 
 The active-collection sensor exposes a `history` attribute with one entry per
 collection. Each entry records `round_number`, `played_count`,
-`last_selected_clip_id`, and `last_reset_at`. A template card can read it:
+`last_selected_clip_id`, and `last_reset_at`. `last_reset_at` reflects whichever
+reset actually occurred: the daily wipe when `history_reset_mode` is `daily`, a
+manual reset in either mode, or `null` when only exhaustion rollovers have
+happened (a rollover is visible through a rising `round_number`, not
+`last_reset_at`). A template card can read it:
 
 ```yaml
 type: markdown
