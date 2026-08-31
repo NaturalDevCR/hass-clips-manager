@@ -8,8 +8,36 @@ import sqlite3
 import threading
 import uuid
 from collections.abc import Generator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from pathlib import Path
+
+
+class _ConnectionHolder:
+    """Thread-local owner that releases a connection when its thread dies.
+
+    sqlite3.Connection does not support weak references, so cleanup hangs off
+    this holder: CPython clears a dead thread's threading.local() storage, the
+    holder's refcount drops to zero and __del__ runs deterministically.
+    """
+
+    def __init__(
+        self,
+        connection: sqlite3.Connection,
+        connections: set[sqlite3.Connection],
+        connections_lock: threading.Lock,
+    ) -> None:
+        self.connection = connection
+        self._connections = connections
+        self._connections_lock = connections_lock
+
+    def __del__(self) -> None:
+        # __del__ may run on an arbitrary thread during interpreter teardown,
+        # so it must never raise. The lock is never held while closing, so
+        # this cannot deadlock with _new_connection() or Database.close().
+        with suppress(Exception):
+            self.connection.close()
+        with suppress(Exception), self._connections_lock:
+            self._connections.discard(self.connection)
 
 
 class Database:
@@ -24,10 +52,13 @@ class Database:
             else url
         )
         # A shared in-memory database survives as long as this keeper remains
-        # open. The creating thread uses it as its own thread-local connection.
+        # open. The Database owns it directly — never through a per-thread
+        # holder — so the creating thread's death cannot close it. The
+        # creating thread still uses it as its own thread-local connection.
+        self._keeper: sqlite3.Connection | None = None
         if self._uri:
-            keeper = self._new_connection()
-            self._local.connection = keeper
+            self._keeper = self._new_connection()
+            self._local.connection = self._keeper
 
     @classmethod
     def create(cls, url: str) -> Database:
@@ -59,8 +90,13 @@ class Database:
     def connection(self) -> sqlite3.Connection:
         connection = getattr(self._local, "connection", None)
         if connection is None:
-            connection = self._new_connection()
-            self._local.connection = connection
+            holder = getattr(self._local, "holder", None)
+            if holder is None:
+                holder = _ConnectionHolder(
+                    self._new_connection(), self._connections, self._connections_lock
+                )
+                self._local.holder = holder
+            connection = holder.connection
         return connection
 
     @contextmanager
