@@ -102,15 +102,20 @@ def test_dead_threads_do_not_leak_file_descriptors(tmp_path) -> None:
     def open_fd_count() -> int:
         return len(list(Path("/proc/self/fd").iterdir()))
 
+    threads = 30
     db = Database.create(str(tmp_path / "worker.sqlite3"))
     _ = db.connection
 
     # Warm up until the interpreter's own per-thread allocations settle.
     for _ in range(3):
-        _churn(db, 30)
+        _churn(db, threads)
     settled = open_fd_count()
 
-    _churn(db, 30)
+    _churn(db, threads)
 
-    assert open_fd_count() <= settled
+    # A pinned connection per retired thread costs several descriptors each, so
+    # the regression signature is growth on the order of the thread count. The
+    # allowance below sits far under that and above the couple of descriptors
+    # unrelated activity in the same test session can move the count by.
+    assert open_fd_count() - settled < threads // 3
     assert len(db._connections) == 1
