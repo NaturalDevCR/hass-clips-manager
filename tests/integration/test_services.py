@@ -89,6 +89,9 @@ async def test_operational_actions_dispatch_only_published_worker_requests(
         async def async_cancel_job(self, job_id: str, **kwargs) -> None:
             self.calls.append(("cancel", {"job_id": job_id, **kwargs}))
 
+        async def async_cancel_all_jobs(self, **kwargs) -> None:
+            self.calls.append(("cancel-all", kwargs))
+
         async def async_cleanup_temporaries(self, **kwargs) -> None:
             self.calls.append(("cleanup", kwargs))
 
@@ -111,6 +114,7 @@ async def test_operational_actions_dispatch_only_published_worker_requests(
     await services.async_run_action(hass, entry, services.SERVICE_COMPILE_ALL, {})
     await services.async_run_action(hass, entry, services.SERVICE_RETRY_FAILED, {})
     await services.async_run_action(hass, entry, "cancel_processing", {})
+    await services.async_run_action(hass, entry, "cancel_all_processing", {})
     await services.async_run_action(hass, entry, "cleanup_temporaries", {})
 
     assert [name for name, _data in client.calls] == [
@@ -118,10 +122,50 @@ async def test_operational_actions_dispatch_only_published_worker_requests(
         "compile",
         "compile",
         "cancel",
+        "cancel-all",
         "cleanup",
     ]
     assert client.calls[2][1]["strategy"] == "compile_stale_only"
     assert client.calls[3][1]["job_id"] == "job-7"
+
+
+@pytest.mark.asyncio
+async def test_cancel_processing_still_cancels_only_one_job(hass, monkeypatch) -> None:
+    """The single-job cancel service keeps its exact behaviour; cancel-all is separate."""
+    from custom_components.cinema_collections import services
+    from custom_components.cinema_collections.const import DOMAIN
+
+    class SingleCancelClient:
+        def __init__(self) -> None:
+            self.cancelled: list[object] = []
+
+        async def async_cancel_job(self, job_id: str, **kwargs) -> None:
+            self.cancelled.append((job_id, kwargs))
+
+        async def async_cancel_all_jobs(self, **kwargs) -> None:
+            raise AssertionError("cancel_processing must not dispatch cancel-all")
+
+    class Coordinator:
+        data = SimpleNamespace(status=SimpleNamespace(current_job={"id": "job-7"}))
+
+        async def async_request_refresh(self) -> None:
+            return None
+
+    entry = SimpleNamespace(entry_id="single-cancel-entry")
+    client = SingleCancelClient()
+    hass.data[DOMAIN] = {
+        entry.entry_id: SimpleNamespace(
+            client=client, history=None, coordinator=Coordinator(), entry=entry
+        )
+    }
+    monkeypatch.setattr(services, "policies_for_entry", lambda _entry: (CollectionPolicy("films"),))
+
+    await services.async_run_action(hass, entry, services.SERVICE_CANCEL_PROCESSING, {})
+
+    assert len(client.cancelled) == 1
+    job_id, kwargs = client.cancelled[0]
+    assert job_id == "job-7"
+    assert "idempotency_key" in kwargs
 
 
 @pytest.mark.asyncio
@@ -180,6 +224,7 @@ async def test_home_assistant_registers_all_service_schemas(hass) -> None:
     """Real HA registration exposes every documented service with its matching schema."""
     from custom_components.cinema_collections.const import DOMAIN
     from custom_components.cinema_collections.services import (
+        SERVICE_CANCEL_ALL_PROCESSING,
         SERVICE_CANCEL_PROCESSING,
         SERVICE_COMPILE_ALL,
         SERVICE_COMPILE_COLLECTION,
@@ -201,6 +246,7 @@ async def test_home_assistant_registers_all_service_schemas(hass) -> None:
         SERVICE_COMPILE_ALL,
         SERVICE_RETRY_FAILED,
         SERVICE_CANCEL_PROCESSING,
+        SERVICE_CANCEL_ALL_PROCESSING,
         SERVICE_SET_COLLECTION_OVERRIDE,
     }
     with pytest.raises(vol.Invalid):
@@ -232,6 +278,7 @@ def test_services_yaml_documents_every_registered_service_input() -> None:
         "compile_all": {"entry_id", "strategy", "skip_if_processing"},
         "retry_failed": {"entry_id", "collection_id"},
         "cancel_processing": {"entry_id", "job_id"},
+        "cancel_all_processing": {"entry_id"},
         "set_collection_override": {"entry_id", "mode", "collection_id"},
     }
     for specification in document.values():

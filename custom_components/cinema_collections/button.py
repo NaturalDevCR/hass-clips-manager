@@ -25,6 +25,9 @@ BUTTON_DESCRIPTIONS: tuple[CinemaCollectionsButtonDescription, ...] = (
         key="cancel_processing", translation_key="cancel_processing"
     ),
     CinemaCollectionsButtonDescription(
+        key="cancel_all_processing", translation_key="cancel_all_processing"
+    ),
+    CinemaCollectionsButtonDescription(
         key="cleanup_temporaries", translation_key="cleanup_temporaries"
     ),
     CinemaCollectionsButtonDescription(key="reset_history", translation_key="reset_history"),

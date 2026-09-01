@@ -316,6 +316,22 @@ async def test_idempotent_mutation_retries_transient_response_with_same_key(
 
 
 @pytest.mark.asyncio
+async def test_cancel_all_jobs_uses_mutation_contract_and_parses_result() -> None:
+    """A user-facing cancel-all maps to the published mutation endpoint."""
+    session = FakeSession(FakeResponse(200, {"count": 2, "job_ids": ["a", "b"]}))
+    client = WorkerApiClient("http://worker.local", "token", session)
+
+    response = await client.async_cancel_all_jobs(idempotency_key="cancel-all")
+
+    assert response == {"count": 2, "job_ids": ["a", "b"]}
+    call = session.calls[0]
+    assert call["method"] == "POST"
+    assert call["url"] == "http://worker.local/api/v1/jobs/cancel-all"
+    assert call["headers"]["Idempotency-Key"] == "cancel-all"
+    assert call["json"] == {}
+
+
+@pytest.mark.asyncio
 async def test_entry_lifecycle_recreates_per_entry_runtime_client(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

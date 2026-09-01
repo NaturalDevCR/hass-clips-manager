@@ -174,6 +174,7 @@ def test_translation_files_are_complete_and_cover_the_integration_surface() -> N
         "compile_all",
         "retry_failed",
         "cancel_processing",
+        "cancel_all_processing",
         "set_collection_override",
     }
     assert OVERRIDE_MODE_SELECTOR.config["translation_key"] == "override_mode"

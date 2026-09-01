@@ -297,6 +297,10 @@ class WorkerApiClient:
             raise ValueError("Worker cancellation requires a job ID")
         return await self._async_mutate("POST", f"/jobs/{job_id}/cancel", {}, idempotency_key)
 
+    async def async_cancel_all_jobs(self, *, idempotency_key: str) -> Mapping[str, Any]:
+        """Request cancellation of the running Worker job and every queued job."""
+        return await self._async_mutate("POST", "/jobs/cancel-all", {}, idempotency_key)
+
     async def async_cleanup_temporaries(self, *, idempotency_key: str) -> Mapping[str, Any]:
         """Request Worker-tracked temporary cleanup without touching local storage."""
         return await self._async_mutate("POST", "/cleanup-temporaries", {}, idempotency_key)

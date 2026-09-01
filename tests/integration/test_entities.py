@@ -115,6 +115,7 @@ def test_entity_modules_publish_required_stable_entity_keys() -> None:
         "compile_all",
         "retry_failed",
         "cancel_processing",
+        "cancel_all_processing",
         "cleanup_temporaries",
         "reset_history",
     }

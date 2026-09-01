@@ -31,6 +31,7 @@ SERVICE_COMPILE_COLLECTION = "compile_collection"
 SERVICE_COMPILE_ALL = "compile_all"
 SERVICE_RETRY_FAILED = "retry_failed"
 SERVICE_CANCEL_PROCESSING = "cancel_processing"
+SERVICE_CANCEL_ALL_PROCESSING = "cancel_all_processing"
 SERVICE_SET_COLLECTION_OVERRIDE = "set_collection_override"
 
 _COLLECTION_ID = vol.All(str, vol.Length(min=1, max=100))
@@ -76,6 +77,7 @@ _COMPILE_ALL_SCHEMA = vol.Schema(
 )
 _RETRY_SCHEMA = vol.Schema({**_BASE_SCHEMA, vol.Optional("collection_id"): _COLLECTION_ID})
 _CANCEL_SCHEMA = vol.Schema({**_BASE_SCHEMA, vol.Optional("job_id"): _COLLECTION_ID})
+_CANCEL_ALL_SCHEMA = vol.Schema({**_BASE_SCHEMA})
 _OVERRIDE_SCHEMA = vol.Schema(
     {
         **_BASE_SCHEMA,
@@ -100,6 +102,7 @@ async def async_register_services(hass: HomeAssistant) -> None:
         (SERVICE_COMPILE_ALL, _COMPILE_ALL_SCHEMA),
         (SERVICE_RETRY_FAILED, _RETRY_SCHEMA),
         (SERVICE_CANCEL_PROCESSING, _CANCEL_SCHEMA),
+        (SERVICE_CANCEL_ALL_PROCESSING, _CANCEL_ALL_SCHEMA),
         (SERVICE_SET_COLLECTION_OVERRIDE, _OVERRIDE_SCHEMA),
     )
     for name, schema in registrations:
@@ -292,6 +295,8 @@ async def async_run_action(
         if not isinstance(job_id, str) or not job_id:
             raise HomeAssistantError("No active Worker job is available to cancel")
         await runtime.client.async_cancel_job(job_id, idempotency_key=_key("cancel"))
+    elif action == SERVICE_CANCEL_ALL_PROCESSING or action == "cancel_all_processing":
+        await runtime.client.async_cancel_all_jobs(idempotency_key=_key("cancel-all"))
     elif action == "cleanup_temporaries":
         await runtime.client.async_cleanup_temporaries(idempotency_key=_key("cleanup"))
     elif action == SERVICE_SET_COLLECTION_OVERRIDE:

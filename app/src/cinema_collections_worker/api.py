@@ -148,6 +148,13 @@ class CancelledJob(Job):
     """Public job representation returned after cancellation."""
 
 
+class CancelledJobs(BaseModel):
+    """Jobs cancelled by one cancel-all request; zero is a successful no-op."""
+
+    count: int = Field(ge=0)
+    job_ids: list[str] = Field(default_factory=list)
+
+
 class Status(BaseModel):
     queue_depth: int = Field(ge=0)
     current_job: Job | None = None
@@ -347,6 +354,65 @@ def _replay_or_remember_job(
             ),
         )
     return job
+
+
+def _replay_or_remember_jobs(
+    database: Database,
+    queue: PersistentJobQueue,
+    *,
+    key: str,
+    operation: str,
+    payload: dict[str, Any],
+    create: Callable[[], list[JobRecord]],
+) -> list[JobRecord]:
+    """Remember and replay a batch mutation exactly like its single-job sibling."""
+    fingerprint = _idempotency_fingerprint(operation, payload)
+    with database.transaction():
+        row = database.connection.execute(
+            "SELECT actor, operation, fingerprint, response FROM idempotency_records "
+            "WHERE request_id=?",
+            (key,),
+        ).fetchone()
+        if row is not None:
+            if (
+                row["actor"] != _ACTOR
+                or row["operation"] != operation
+                or row["fingerprint"] != fingerprint
+            ):
+                raise IdempotencyConflict("idempotency key was already used for another request")
+            try:
+                ids = json.loads(row["response"])["ids"]
+                return [queue.get(str(job_id)) for job_id in ids]
+            except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+                raise ValueError("idempotent job response is unavailable") from exc
+        jobs = create()
+        database.connection.execute(
+            "INSERT INTO idempotency_records(request_id,actor,operation,response,created_at,fingerprint) VALUES(?,?,?,?,?,?)",
+            (
+                key,
+                _ACTOR,
+                operation,
+                json.dumps({"ids": [job.id for job in jobs]}),
+                datetime.now(UTC).isoformat(),
+                fingerprint,
+            ),
+        )
+    return jobs
+
+
+def _cancel_active_jobs(queue: PersistentJobQueue) -> list[JobRecord]:
+    """Snapshot and cooperatively cancel the running job and every queued job.
+
+    Jobs enqueued after the snapshot are out of scope by definition; each
+    affected job reuses the same ``request_cancel`` transition a single
+    cancellation uses, so queued jobs finish immediately while a running job
+    waits for its Worker consumer to observe ``cancel_requested``.
+    """
+
+    rows = queue.db.connection.execute(
+        "SELECT id FROM jobs WHERE state IN ('queued','running') ORDER BY created_at, id"
+    ).fetchall()
+    return [queue.request_cancel(str(row["id"])) for row in rows]
 
 
 def _queued_system_job(
@@ -785,6 +851,29 @@ def create_app(settings: WorkerSettings) -> FastAPI:
             create=lambda: app.state.jobs.cancel(job_id),
         )
         return CancelledJob.model_validate(_serialize_job(job, request).model_dump(mode="json"))
+
+    @app.post(
+        "/api/v1/jobs/cancel-all",
+        response_model=CancelledJobs,
+        dependencies=MutationPreconditions,
+        responses=_MUTATION_RESPONSES,
+        operation_id="cancelAllJobs",
+    )
+    def cancel_all_jobs(key: IdempotencyKey) -> CancelledJobs:
+        """Cancel the running job and every queued job in one cooperative request.
+
+        Jobs enqueued after this call are out of scope by definition.  A
+        request with nothing running or queued succeeds and reports zero.
+        """
+        jobs = _replay_or_remember_jobs(
+            database,
+            queue,
+            key=key,
+            operation="job.cancel-all",
+            payload={},
+            create=lambda: _cancel_active_jobs(queue),
+        )
+        return CancelledJobs(count=len(jobs), job_ids=[job.id for job in jobs])
 
     @app.get(
         "/api/v1/logs",

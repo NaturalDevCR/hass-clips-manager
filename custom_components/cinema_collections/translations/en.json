@@ -194,6 +194,7 @@
       "compile_all": {"name": "Compile all collections"},
       "retry_failed": {"name": "Retry failed compilation"},
       "cancel_processing": {"name": "Cancel processing"},
+      "cancel_all_processing": {"name": "Cancel all processing"},
       "cleanup_temporaries": {"name": "Clean up temporary files"},
       "reset_history": {"name": "Reset playback history"}
     },
@@ -270,6 +271,13 @@
       "fields": {
         "entry_id": {"name": "Config entry", "description": "Optional entry when more than one Worker is loaded."},
         "job_id": {"name": "Job", "description": "Optional Worker job ID; omit to cancel the reported job."}
+      }
+    },
+    "cancel_all_processing": {
+      "name": "Cancel all processing",
+      "description": "Cancel the active Worker job and every queued job.",
+      "fields": {
+        "entry_id": {"name": "Config entry", "description": "Optional entry when more than one Worker is loaded."}
       }
     },
     "set_collection_override": {

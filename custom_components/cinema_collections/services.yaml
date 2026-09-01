@@ -128,6 +128,15 @@ cancel_processing:
       description: Optional Worker job ID. Omit to cancel the currently reported job.
       selector:
         text:
+cancel_all_processing:
+  name: Cancel all processing
+  description: Cancel the active Worker job and every queued job.
+  fields:
+    entry_id:
+      description: Optional Cinema Collections config entry when more than one is loaded.
+      selector:
+        config_entry:
+          integration: cinema_collections
 set_collection_override:
   name: Set collection override
   description: Set automatic, default, or explicit collection selection policy.

@@ -194,6 +194,7 @@
       "compile_all": {"name": "Compilar todas las colecciones"},
       "retry_failed": {"name": "Reintentar compilación fallida"},
       "cancel_processing": {"name": "Cancelar procesamiento"},
+      "cancel_all_processing": {"name": "Cancelar todo el procesamiento"},
       "cleanup_temporaries": {"name": "Limpiar archivos temporales"},
       "reset_history": {"name": "Restablecer historial de reproducción"}
     },
@@ -270,6 +271,13 @@
       "fields": {
         "entry_id": {"name": "Entrada de configuración", "description": "Entrada opcional cuando hay más de un Worker cargado."},
         "job_id": {"name": "Trabajo", "description": "ID de trabajo opcional; omítelo para cancelar el trabajo informado."}
+      }
+    },
+    "cancel_all_processing": {
+      "name": "Cancelar todo el procesamiento",
+      "description": "Cancela el trabajo activo del Worker y todos los trabajos en cola.",
+      "fields": {
+        "entry_id": {"name": "Entrada de configuración", "description": "Entrada opcional cuando hay más de un Worker cargado."}
       }
     },
     "set_collection_override": {
