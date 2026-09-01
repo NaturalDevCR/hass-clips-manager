@@ -23,11 +23,22 @@ class FfmpegCommandBuilder:
     def _video_filter(profile: ProcessingProfile) -> str:
         scaling = profile.video.scaling
         if scaling.strategy == "crop":
-            return f"scale={scaling.width}:{scaling.height}:force_original_aspect_ratio=increase,crop={scaling.width}:{scaling.height},setsar=1"
-        return (
-            f"scale={scaling.width}:{scaling.height}:force_original_aspect_ratio=decrease,"
-            f"pad={scaling.width}:{scaling.height}:(ow-iw)/2:(oh-ih)/2,setsar={scaling.sar_num}/{scaling.sar_den}"
-        )
+            geometry = (
+                f"scale={scaling.width}:{scaling.height}:force_original_aspect_ratio=increase,"
+                f"crop={scaling.width}:{scaling.height},setsar=1"
+            )
+        else:
+            geometry = (
+                f"scale={scaling.width}:{scaling.height}:force_original_aspect_ratio=decrease,"
+                f"pad={scaling.width}:{scaling.height}:(ow-iw)/2:(oh-ih)/2,"
+                f"setsar={scaling.sar_num}/{scaling.sar_den}"
+            )
+        # xfade refuses inputs whose timebases differ, and a source's timebase
+        # follows its frame rate, so an intro shot at a different rate than the
+        # clip fails the whole compile. The encoder's own -r arrives after the
+        # filter graph, far too late. Normalising rate and pixel format on every
+        # branch gives each one the same timebase before they ever meet.
+        return f"{geometry},fps={profile.video.fps},format={profile.video.pixel_format}"
 
     @staticmethod
     def _audio_filter(profile: ProcessingProfile, duration_seconds: float) -> str:
