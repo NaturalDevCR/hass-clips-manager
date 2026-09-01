@@ -42,6 +42,11 @@
   "config_subentries": {
     "collection": {
       "title": "Colección",
+      "entry_type": "Colección",
+      "initiate_flow": {
+        "user": "Añadir colección",
+        "reconfigure": "Reconfigurar colección"
+      },
       "step": {
         "user": {
           "data": {
@@ -93,6 +98,11 @@
     },
     "profile": {
       "title": "Perfil de procesamiento",
+      "entry_type": "Perfil de procesamiento",
+      "initiate_flow": {
+        "user": "Añadir perfil de procesamiento",
+        "reconfigure": "Reconfigurar perfil de procesamiento"
+      },
       "step": {
         "video": {
           "title": "Video",
