@@ -49,6 +49,10 @@
       },
       "step": {
         "user": {
+          "data_description": {
+            "processing_profile_id": "Qué perfil de procesamiento compila esta colección. El perfil de compatibilidad integrado no se puede editar; añade un perfil propio para cambiar la codificación o el intro y el outro.",
+            "source_directory": "Carpeta con los archivos de origen de esta colección, relativa a la raíz de origen del Worker. Usa un nombre simple como halloween, no una ruta completa."
+          },
           "data": {
             "collection_id": "ID de colección",
             "name": "Nombre",
@@ -105,7 +109,7 @@
       },
       "step": {
         "video": {
-          "title": "Video",
+          "title": "Paso 1 de 4: Video",
           "description": "Identifica el perfil y configura la codificación, la calidad y el escalado del video.",
           "data": {
             "profile_id": "ID de perfil",
@@ -128,7 +132,7 @@
           }
         },
         "audio": {
-          "title": "Audio",
+          "title": "Paso 2 de 4: Audio",
           "description": "Configura la codificación del audio y la normalización de sonoridad.",
           "data": {
             "audio_codec": "Códec de audio",
@@ -146,7 +150,7 @@
           }
         },
         "timing": {
-          "title": "Intro, outro y temporización",
+          "title": "Paso 3 de 4: Intro, outro y temporización",
           "description": "Define los recursos de intro y outro, los fundidos y la temporización de segmentos.",
           "data": {
             "intro_reference": "Nombre de archivo del recurso de intro",
@@ -159,7 +163,7 @@
           }
         },
         "output": {
-          "title": "Salida y opciones avanzadas",
+          "title": "Paso 4 de 4: Salida y opciones avanzadas",
           "description": "Define el contenedor de salida y las opciones de procesamiento avanzadas.",
           "data": {
             "output_container": "Contenedor de salida",

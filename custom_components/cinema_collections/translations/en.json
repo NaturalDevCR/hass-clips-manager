@@ -49,6 +49,10 @@
       },
       "step": {
         "user": {
+          "data_description": {
+            "processing_profile_id": "Which processing profile compiles this collection. The built-in compatibility profile cannot be edited; add a processing profile of your own to change encoding, intro or outro settings.",
+            "source_directory": "Folder holding this collection's source files, relative to the Worker's source root. Use a plain name such as halloween, not a full path."
+          },
           "data": {
             "collection_id": "Collection ID",
             "name": "Name",
@@ -105,7 +109,7 @@
       },
       "step": {
         "video": {
-          "title": "Video",
+          "title": "Step 1 of 4: Video",
           "description": "Identify the profile and configure video encoding, quality and scaling.",
           "data": {
             "profile_id": "Profile ID",
@@ -128,7 +132,7 @@
           }
         },
         "audio": {
-          "title": "Audio",
+          "title": "Step 2 of 4: Audio",
           "description": "Configure audio encoding and loudness normalization.",
           "data": {
             "audio_codec": "Audio codec",
@@ -146,7 +150,7 @@
           }
         },
         "timing": {
-          "title": "Intro, outro and timing",
+          "title": "Step 3 of 4: Intro, outro and timing",
           "description": "Set intro and outro assets, fades and segment timing.",
           "data": {
             "intro_reference": "Intro asset filename",
@@ -159,7 +163,7 @@
           }
         },
         "output": {
-          "title": "Output and advanced",
+          "title": "Step 4 of 4: Output and advanced",
           "description": "Set the output container and advanced processing options.",
           "data": {
             "output_container": "Output container",
