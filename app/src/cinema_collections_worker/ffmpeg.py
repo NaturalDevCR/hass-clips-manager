@@ -232,6 +232,14 @@ class FfmpegCommandBuilder:
             command.extend(["-crf", f"{profile.video.quality.crf:g}"])
         else:
             command.extend(["-b:v", f"{profile.video.quality.bitrate_kbps}k"])
+        if profile.video.maxrate_kbps is not None:
+            command.extend(["-maxrate", f"{profile.video.maxrate_kbps}k"])
+        if profile.video.bufsize_kbps is not None:
+            command.extend(["-bufsize", f"{profile.video.bufsize_kbps}k"])
+        if profile.video.keyframe_interval_seconds is not None:
+            command.extend(
+                ["-g", str(round(profile.video.keyframe_interval_seconds * profile.video.fps))]
+            )
         command.extend(
             [
                 "-pix_fmt",

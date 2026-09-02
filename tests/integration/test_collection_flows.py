@@ -42,6 +42,9 @@ def _profile_form(**overrides: object) -> dict[str, object]:
         "video_sar_num": 1,
         "video_sar_den": 1,
         "video_fast_start": True,
+        "video_maxrate_kbps": "",
+        "video_bufsize_kbps": "",
+        "video_keyframe_interval_seconds": "",
         "audio_codec": "aac",
         "audio_bitrate_kbps": 192,
         "audio_channels": 2,
@@ -64,6 +67,7 @@ def _profile_form(**overrides: object) -> dict[str, object]:
         "intro_reference": "",
         "outro_reference": "",
         "timeout_seconds": 300,
+        "timeout_seconds_per_minute": 120,
         "minimum_segment_duration_seconds": "",
     }
     values.update(overrides)
@@ -88,6 +92,9 @@ async def _walk_profile_wizard(hass, entry, form, *, source="user", subentry_id=
             "audio_channels",
             "audio_sample_rate",
             "video_bitrate_kbps",
+            "video_maxrate_kbps",
+            "video_bufsize_kbps",
+            "video_keyframe_interval_seconds",
             "minimum_segment_duration_seconds",
         ):
             if name in data:

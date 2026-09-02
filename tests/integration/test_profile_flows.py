@@ -36,6 +36,9 @@ VIDEO_STEP_FIELDS = (
     "video_sar_num",
     "video_sar_den",
     "video_fast_start",
+    "video_maxrate_kbps",
+    "video_bufsize_kbps",
+    "video_keyframe_interval_seconds",
 )
 AUDIO_STEP_FIELDS = (
     "audio_codec",
@@ -65,6 +68,7 @@ OUTPUT_STEP_FIELDS = (
     "hardware_acceleration",
     "decode_error_policy",
     "timeout_seconds",
+    "timeout_seconds_per_minute",
 )
 STEP_FIELDS = (VIDEO_STEP_FIELDS, AUDIO_STEP_FIELDS, TIMING_STEP_FIELDS, OUTPUT_STEP_FIELDS)
 
@@ -89,6 +93,9 @@ def profile_form(**overrides: object) -> dict[str, object]:
         "video_sar_num": 1,
         "video_sar_den": 1,
         "video_fast_start": True,
+        "video_maxrate_kbps": "",
+        "video_bufsize_kbps": "",
+        "video_keyframe_interval_seconds": "",
         "audio_codec": "aac",
         "audio_bitrate_kbps": 192,
         "audio_channels": 2,
@@ -111,6 +118,7 @@ def profile_form(**overrides: object) -> dict[str, object]:
         "intro_reference": "",
         "outro_reference": "",
         "timeout_seconds": 300,
+        "timeout_seconds_per_minute": 120,
         "minimum_segment_duration_seconds": "",
     }
     values.update(overrides)
@@ -138,6 +146,9 @@ def expected_settings(**overrides: object) -> dict[str, object]:
                 "sar_den": 1,
             },
             "fast_start": True,
+            "maxrate_kbps": None,
+            "bufsize_kbps": None,
+            "keyframe_interval_seconds": None,
         },
         "audio": {
             "codec": "aac",
@@ -182,6 +193,7 @@ def expected_settings(**overrides: object) -> dict[str, object]:
         "intro_reference": None,
         "outro_reference": None,
         "timeout_seconds": 300,
+        "timeout_seconds_per_minute": 120,
         "minimum_segment_duration_seconds": None,
     }
     settings.update(overrides)
@@ -198,6 +210,9 @@ def profile_form_steps(**overrides: object) -> list[dict[str, object]]:
     steps = [{name: form[name] for name in fields} for fields in STEP_FIELDS]
     video = steps[0]
     video["video_bitrate_kbps"] = str(video["video_bitrate_kbps"])
+    video["video_maxrate_kbps"] = str(video["video_maxrate_kbps"])
+    video["video_bufsize_kbps"] = str(video["video_bufsize_kbps"])
+    video["video_keyframe_interval_seconds"] = str(video["video_keyframe_interval_seconds"])
     audio = steps[1]
     audio["audio_channels"] = str(audio["audio_channels"])
     audio["audio_sample_rate"] = str(audio["audio_sample_rate"])
@@ -362,6 +377,44 @@ async def test_profile_wizard_disabled_loudness_drops_analysis_targets(
     assert "integrated_lufs" not in loudness
     assert "true_peak_dbtp" not in loudness
     assert "lra_lu" not in loudness
+
+
+@pytest.mark.asyncio
+async def test_profile_wizard_rate_control_fields_reach_the_video_payload(
+    hass, aioclient_mock, worker_health_payload
+) -> None:
+    """Bitrate ceiling, buffer and keyframe interval flow into video settings."""
+    await _create_profile(
+        hass,
+        aioclient_mock,
+        worker_health_payload,
+        profile_form_steps(
+            video_maxrate_kbps=8000,
+            video_bufsize_kbps=16000,
+            video_keyframe_interval_seconds=2.0,
+            timeout_seconds_per_minute=180,
+        ),
+    )
+
+    settings = _create_payload(aioclient_mock)["settings"]
+    video = settings["video"]
+    assert video["maxrate_kbps"] == 8000
+    assert video["bufsize_kbps"] == 16000
+    assert video["keyframe_interval_seconds"] == 2.0
+    assert settings["timeout_seconds_per_minute"] == 180
+
+
+@pytest.mark.asyncio
+async def test_profile_wizard_blank_rate_control_fields_serialize_to_null(
+    hass, aioclient_mock, worker_health_payload
+) -> None:
+    """Blank optional encoder fields become null, never empty strings."""
+    await _create_profile(hass, aioclient_mock, worker_health_payload, profile_form_steps())
+
+    video = _create_payload(aioclient_mock)["settings"]["video"]
+    assert video["maxrate_kbps"] is None
+    assert video["bufsize_kbps"] is None
+    assert video["keyframe_interval_seconds"] is None
 
 
 @pytest.mark.asyncio

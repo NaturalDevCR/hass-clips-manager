@@ -358,6 +358,7 @@ def async_update_collection_subentry(
 
 
 _INT_GT_0 = vol.All(vol.Coerce(int), vol.Range(min=1))
+_INT_1_3600 = vol.All(vol.Coerce(int), vol.Range(min=1, max=3600))
 _INT_1_16384 = vol.All(vol.Coerce(int), vol.Range(min=1, max=16384))
 _INT_1_240 = vol.All(vol.Coerce(int), vol.Range(min=1, max=240))
 _FLOAT_0_51 = vol.All(vol.Coerce(float), vol.Range(min=0, max=51))
@@ -502,6 +503,9 @@ def _profile_form_values(settings: Mapping[str, object]) -> dict[str, object]:
         "video_sar_num": scaling.get("sar_num", 1),
         "video_sar_den": scaling.get("sar_den", 1),
         "video_fast_start": video.get("fast_start", True),
+        "video_maxrate_kbps": str(video.get("maxrate_kbps", "") or ""),
+        "video_bufsize_kbps": str(video.get("bufsize_kbps", "") or ""),
+        "video_keyframe_interval_seconds": str(video.get("keyframe_interval_seconds", "") or ""),
         "audio_codec": audio.get("codec", "aac"),
         "audio_bitrate_kbps": audio.get("bitrate_kbps", 192),
         "audio_channels": audio.get("channels", 2),
@@ -524,6 +528,7 @@ def _profile_form_values(settings: Mapping[str, object]) -> dict[str, object]:
         "intro_reference": settings.get("intro_reference") or "",
         "outro_reference": settings.get("outro_reference") or "",
         "timeout_seconds": settings.get("timeout_seconds", 300),
+        "timeout_seconds_per_minute": settings.get("timeout_seconds_per_minute", 120),
         "minimum_segment_duration_seconds": str(
             settings.get("minimum_segment_duration_seconds") or ""
         ),
@@ -907,6 +912,12 @@ def _profile_video_schema(existing: ProfileSubentryData | None) -> vol.Schema:
             vol.Required("video_sar_num", default=form["video_sar_num"]): _INT_GT_0,
             vol.Required("video_sar_den", default=form["video_sar_den"]): _INT_GT_0,
             vol.Required("video_fast_start", default=form["video_fast_start"]): bool,
+            vol.Optional("video_maxrate_kbps", default=form["video_maxrate_kbps"]): str,
+            vol.Optional("video_bufsize_kbps", default=form["video_bufsize_kbps"]): str,
+            vol.Optional(
+                "video_keyframe_interval_seconds",
+                default=form["video_keyframe_interval_seconds"],
+            ): str,
         }
     )
 
@@ -992,6 +1003,9 @@ def _profile_output_schema(existing: ProfileSubentryData | None) -> vol.Schema:
                 "decode_error_policy", default=form["decode_error_policy"]
             ): _choice_selector([("warn", "Warn"), ("fail", "Fail")]),
             vol.Required("timeout_seconds", default=form["timeout_seconds"]): _INT_GT_0,
+            vol.Required(
+                "timeout_seconds_per_minute", default=form["timeout_seconds_per_minute"]
+            ): _INT_1_3600,
         }
     )
 
@@ -1036,6 +1050,15 @@ def _profile_settings_from_flow_input(user_input: Mapping[str, object]) -> dict[
     raw_minimum = user_input.get("minimum_segment_duration_seconds")
     minimum_segment_duration = _to_float(raw_minimum) if raw_minimum not in (None, "") else None
 
+    raw_maxrate = user_input.get("video_maxrate_kbps")
+    maxrate_kbps = _to_int(raw_maxrate) if raw_maxrate not in (None, "") else None
+    raw_bufsize = user_input.get("video_bufsize_kbps")
+    bufsize_kbps = _to_int(raw_bufsize) if raw_bufsize not in (None, "") else None
+    raw_keyframe_interval = user_input.get("video_keyframe_interval_seconds")
+    keyframe_interval = (
+        _to_float(raw_keyframe_interval) if raw_keyframe_interval not in (None, "") else None
+    )
+
     return {
         "video": {
             "width": _to_int(user_input["video_width"]),
@@ -1049,6 +1072,9 @@ def _profile_settings_from_flow_input(user_input: Mapping[str, object]) -> dict[
             "pixel_format": str(user_input["video_pixel_format"]),
             "scaling": scaling,
             "fast_start": bool(user_input["video_fast_start"]),
+            "maxrate_kbps": maxrate_kbps,
+            "bufsize_kbps": bufsize_kbps,
+            "keyframe_interval_seconds": keyframe_interval,
         },
         "audio": {
             "codec": str(user_input["audio_codec"]),
@@ -1087,6 +1113,7 @@ def _profile_settings_from_flow_input(user_input: Mapping[str, object]) -> dict[
         "intro_reference": str(user_input.get("intro_reference") or "") or None,
         "outro_reference": str(user_input.get("outro_reference") or "") or None,
         "timeout_seconds": _to_int(user_input["timeout_seconds"]),
+        "timeout_seconds_per_minute": _to_int(user_input["timeout_seconds_per_minute"]),
         "minimum_segment_duration_seconds": minimum_segment_duration,
     }
 

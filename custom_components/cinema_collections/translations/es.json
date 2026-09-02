@@ -128,7 +128,10 @@
             "video_scaling_strategy": "Estrategia de escala del video",
             "video_sar_num": "Relación de aspecto de píxeles (numerador)",
             "video_sar_den": "Relación de aspecto de píxeles (denominador)",
-            "video_fast_start": "Inicio rápido del video"
+            "video_fast_start": "Inicio rápido del video",
+            "video_maxrate_kbps": "Tasa de bits máxima del video (kbps, opcional)",
+            "video_bufsize_kbps": "Búfer de control de tasa del video (kbps, opcional)",
+            "video_keyframe_interval_seconds": "Intervalo de fotogramas clave (segundos, opcional)"
           }
         },
         "audio": {
@@ -169,7 +172,8 @@
             "output_container": "Contenedor de salida",
             "hardware_acceleration": "Aceleración por hardware",
             "decode_error_policy": "Política de errores de decodificación",
-            "timeout_seconds": "Tiempo de espera por pasada (segundos)"
+            "timeout_seconds": "Tiempo de espera por pasada (segundos)",
+            "timeout_seconds_per_minute": "Tiempo de espera por minuto de contenido (segundos)"
           }
         }
       },

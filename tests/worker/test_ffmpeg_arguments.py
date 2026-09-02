@@ -75,6 +75,106 @@ def test_builder_input_indices_and_transition_offsets_follow_segment_durations(t
     assert "fade=t=out:st=13.5:d=1.5" in graph
 
 
+def test_builder_without_rate_control_or_keyframe_fields_returns_the_legacy_argv(tmp_path):
+    """Unset optional encoder fields must not change the command by one byte."""
+    profile = ProcessingProfile()
+    job = JobRecord(
+        id="job-4",
+        kind="compile",
+        state=JobState.QUEUED,
+        collection_id="films",
+        clip_id="clip-4",
+        source_relative_path="films/source.mp4",
+        output_relative_path="films/result.mp4",
+        source_fingerprint="source",
+        profile_fingerprint="profile",
+        profile_settings=profile.model_dump(mode="json"),
+        duration_seconds=10,
+        source_path=tmp_path / "source.mp4",
+        temporary_output_path=tmp_path / "out.mp4",
+    )
+
+    command = FfmpegCommandBuilder().build(job)
+
+    graph = (
+        "[0:v]scale=3840:2160:force_original_aspect_ratio=decrease,"
+        "pad=3840:2160:(ow-iw)/2:(oh-ih)/2,setsar=1/1,fps=24,format=yuv420p[v_clip];"
+        "[0:a]aformat=channel_layouts=stereo,aresample=48000,apad,atrim=duration=10.000,"
+        "loudnorm=I=-18:TP=-1.5:LRA=11[a_clip];"
+        "[v_clip]fade=t=in:st=0:d=1,fade=t=out:st=8.5:d=1.5[v_final];"
+        "[a_clip]loudnorm=I=-18:TP=-1.5:LRA=11,anull[a_final]"
+    )
+    assert command == [
+        "ffmpeg",
+        "-hide_banner",
+        "-nostdin",
+        "-y",
+        "-progress",
+        "pipe:1",
+        "-i",
+        str(job.source_path),
+        "-filter_complex",
+        graph,
+        "-map",
+        "[v_final]",
+        "-map",
+        "[a_final]",
+        "-r",
+        "24",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "fast",
+        "-profile:v",
+        "high",
+        "-level:v",
+        "5.1",
+        "-crf",
+        "23",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
+        "-movflags",
+        "+faststart",
+        str(job.temporary_output_path),
+    ]
+
+
+def test_builder_emits_maxrate_bufsize_and_keyframe_interval_when_configured(tmp_path):
+    profile = ProcessingProfile(
+        video={
+            "maxrate_kbps": 8000,
+            "bufsize_kbps": 16000,
+            "keyframe_interval_seconds": 2.0,
+        }
+    )
+    job = JobRecord(
+        id="job-5",
+        kind="compile",
+        state=JobState.QUEUED,
+        collection_id="films",
+        clip_id="clip-5",
+        source_relative_path="films/source.mp4",
+        output_relative_path="films/result.mp4",
+        source_fingerprint="source",
+        profile_fingerprint="profile",
+        profile_settings=profile.model_dump(mode="json"),
+        duration_seconds=10,
+        source_path=tmp_path / "source.mp4",
+        temporary_output_path=tmp_path / "out.mp4",
+    )
+
+    command = FfmpegCommandBuilder().build(job)
+
+    assert command[command.index("-maxrate") + 1] == "8000k"
+    assert command[command.index("-bufsize") + 1] == "16000k"
+    # 2.0 seconds at 24 fps rounds to a 48-frame keyframe interval.
+    assert command[command.index("-g") + 1] == "48"
+
+
 def test_builder_honors_h264_profile_level_and_decode_failure_policy(tmp_path):
     profile = ProcessingProfile(decode_error_policy="fail")
     job = JobRecord(

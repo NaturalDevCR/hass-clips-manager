@@ -128,7 +128,10 @@
             "video_scaling_strategy": "Video scaling strategy",
             "video_sar_num": "Video pixel aspect ratio (numerator)",
             "video_sar_den": "Video pixel aspect ratio (denominator)",
-            "video_fast_start": "Video fast start"
+            "video_fast_start": "Video fast start",
+            "video_maxrate_kbps": "Video maximum bitrate (kbps, optional)",
+            "video_bufsize_kbps": "Video rate-control buffer (kbps, optional)",
+            "video_keyframe_interval_seconds": "Keyframe interval (seconds, optional)"
           }
         },
         "audio": {
@@ -169,7 +172,8 @@
             "output_container": "Output container",
             "hardware_acceleration": "Hardware acceleration",
             "decode_error_policy": "Decode error policy",
-            "timeout_seconds": "Per-pass timeout (seconds)"
+            "timeout_seconds": "Per-pass timeout (seconds)",
+            "timeout_seconds_per_minute": "Timeout per minute of content (seconds)"
           }
         }
       },

@@ -111,6 +111,9 @@ class VideoSettings(ProfileModel):
     pixel_format: str = "yuv420p"
     scaling: ScalingStrategy = AspectFitScaling(width=3840, height=2160)
     fast_start: bool = True
+    maxrate_kbps: int | None = Field(default=None, gt=0)
+    bufsize_kbps: int | None = Field(default=None, gt=0)
+    keyframe_interval_seconds: float | None = Field(default=None, gt=0, le=60)
 
 
 class AudioSettings(ProfileModel):
@@ -174,6 +177,7 @@ class ProcessingProfile(ProfileModel):
     intro_reference: str | None = None
     outro_reference: str | None = None
     timeout_seconds: int = Field(default=300, gt=0)
+    timeout_seconds_per_minute: int = Field(default=120, gt=0, le=3600)
     minimum_segment_duration_seconds: float | None = Field(default=None, gt=0)
 
     @field_validator("intro_reference", "outro_reference")

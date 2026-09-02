@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -144,6 +146,62 @@ class _Probe(Protocol):
 
 def _now() -> datetime:
     return datetime.now(UTC)
+
+
+_FAILURE_MARKERS = (
+    "error",
+    "invalid",
+    "failed",
+    "timed out",
+    "no such",
+    "permission denied",
+    "conversion failed",
+    "signal",
+)
+_CODEC_STATS_ROW = re.compile(r"^\[[A-Za-z0-9_]+ @ 0x[0-9a-fA-F]+\]")
+
+
+def _phase_timeout_seconds(profile: ProcessingProfile, duration_seconds: float) -> float:
+    """Scale one phase's FFmpeg allowance with the content it processes.
+
+    ``timeout_seconds`` stays the floor for short clips; anything longer earns
+    ``timeout_seconds_per_minute`` for each (rounded-up) minute of content.
+    """
+    minutes = math.ceil(max(0.0, duration_seconds) / 60)
+    return float(max(profile.timeout_seconds, minutes * profile.timeout_seconds_per_minute))
+
+
+def _composed_duration_seconds(job: JobRecord, profile: ProcessingProfile) -> float:
+    """Return the timeline length the encode and final mix actually process."""
+    transition = profile.transitions[0].duration_seconds if profile.transitions else 0.0
+    total = job.duration_seconds
+    if job.intro_path is not None:
+        total += job.intro_duration_seconds - transition
+    if job.outro_path is not None:
+        total += job.outro_duration_seconds - transition
+    return max(0.0, total)
+
+
+def _failure_reason(output: str, fallback: str) -> str:
+    """Keep the lines that explain a failure, not the codec statistics epilogue.
+
+    FFmpeg prints a long ``[libx264 @ ...]`` / ``[aac @ ...]`` statistics block
+    when it exits, so a plain tail keeps percentages and loses the decisive
+    line. Marker lines stay first, the tail follows as context, and the result
+    stays inside the same 1000-character bound the job error always had.
+    """
+    lines = [line.strip() for line in output.splitlines() if line.strip()]
+    informative = [
+        line
+        for line in lines
+        if not _CODEC_STATS_ROW.match(line)
+        or any(marker in line.lower() for marker in _FAILURE_MARKERS)
+    ]
+    decisive = [
+        line for line in informative if any(marker in line.lower() for marker in _FAILURE_MARKERS)
+    ]
+    context = [line for line in informative[-5:] if line not in decisive]
+    return "\n".join(decisive + context)[-1000:] or fallback
 
 
 class JobService:
@@ -709,7 +767,9 @@ class JobWorker:
             temp_dir.mkdir(parents=True, exist_ok=False)
             runtime_job = self._runtime_job(job, temp_dir)
             profile = ProcessingProfile.model_validate(job.profile_settings)
-            timeout = profile.timeout_seconds
+            composed_timeout = _phase_timeout_seconds(
+                profile, _composed_duration_seconds(runtime_job, profile)
+            )
             measured_loudness: dict[str, float] | None = None
             successful = False
             cancelled = False
@@ -727,6 +787,11 @@ class JobWorker:
                     "intro": runtime_job.intro_has_audio,
                     "outro": runtime_job.outro_has_audio,
                 }
+                segment_durations = {
+                    "clip": runtime_job.duration_seconds,
+                    "intro": runtime_job.intro_duration_seconds,
+                    "outro": runtime_job.outro_duration_seconds,
+                }
                 for name, path in segment_paths.items():
                     if path is None or not segment_audio[name]:
                         continue
@@ -737,7 +802,9 @@ class JobWorker:
                         runtime_job, name
                     )
                     analysis_ok, analysis_cancelled, analysis_output = self._run_process(
-                        runtime_job, analysis_command, timeout
+                        runtime_job,
+                        analysis_command,
+                        _phase_timeout_seconds(profile, segment_durations[name]),
                     )
                     if analysis_cancelled:
                         finished = self._finish(job, JobState.CANCELLED, "cancelled")
@@ -765,7 +832,7 @@ class JobWorker:
                         include_final_loudness=False,
                         segment_loudness=measured_segments,
                     ),
-                    timeout,
+                    composed_timeout,
                 )
                 if composition_cancelled:
                     finished = self._finish(job, JobState.CANCELLED, "cancelled")
@@ -775,7 +842,7 @@ class JobWorker:
                     finished = self._finish(
                         job,
                         JobState.FAILED,
-                        composition_output[-1000:] or "composition failed",
+                        _failure_reason(composition_output, "composition failed"),
                         retry=retry,
                     )
                     return JobRunResult(job=finished, retry_scheduled=retry)
@@ -788,7 +855,7 @@ class JobWorker:
                         runtime_job, composed_mix
                     )
                     analysis_ok, analysis_cancelled, analysis_output = self._run_process(
-                        runtime_job, analysis, timeout
+                        runtime_job, analysis, composed_timeout
                     )
                     if analysis_cancelled:
                         finished = self._finish(job, JobState.CANCELLED, "cancelled")
@@ -807,7 +874,7 @@ class JobWorker:
                 encode_command = self.command_builder.build(runtime_job)
             if encode_command is not None:
                 successful, cancelled, output = self._run_process(
-                    runtime_job, encode_command, timeout
+                    runtime_job, encode_command, composed_timeout
                 )
             parsed = self._parse_progress(output, job.duration_seconds)
             if parsed is None:
@@ -821,7 +888,7 @@ class JobWorker:
             if not successful:
                 retry = job.attempt < job.max_attempts
                 finished = self._finish(
-                    job, JobState.FAILED, output[-1000:] or "FFmpeg failed", retry=retry
+                    job, JobState.FAILED, _failure_reason(output, "FFmpeg failed"), retry=retry
                 )
                 return JobRunResult(job=finished, retry_scheduled=retry)
             assert runtime_job.temporary_output_path is not None

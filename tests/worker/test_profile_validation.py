@@ -65,3 +65,43 @@ def test_asset_reference_accepts_safe_relative_path():
 
 def test_hardware_acceleration_is_disabled_by_default():
     assert validate_profile(ProcessingProfile()).hardware_acceleration is False
+
+
+def test_timeout_seconds_per_minute_defaults_to_a_validated_allowance():
+    profile = validate_profile(ProcessingProfile())
+    assert profile.timeout_seconds == 300
+    assert profile.timeout_seconds_per_minute == 120
+
+
+@pytest.mark.parametrize("value", [0, -1, 3601])
+def test_timeout_seconds_per_minute_rejects_out_of_range_values(value):
+    with pytest.raises(ValueError):
+        ProcessingProfile(timeout_seconds_per_minute=value)
+
+
+def test_rate_control_and_keyframe_fields_default_to_unset():
+    video = validate_profile(ProcessingProfile()).video
+    assert video.maxrate_kbps is None
+    assert video.bufsize_kbps is None
+    assert video.keyframe_interval_seconds is None
+
+
+@pytest.mark.parametrize("field", ["maxrate_kbps", "bufsize_kbps", "keyframe_interval_seconds"])
+def test_rate_control_fields_reject_non_positive_values(field):
+    with pytest.raises(ValueError):
+        ProcessingProfile(video={field: 0})
+
+
+def test_rate_control_fields_accept_positive_values():
+    video = validate_profile(
+        ProcessingProfile(
+            video={
+                "maxrate_kbps": 8000,
+                "bufsize_kbps": 16000,
+                "keyframe_interval_seconds": 2.0,
+            }
+        )
+    ).video
+    assert video.maxrate_kbps == 8000
+    assert video.bufsize_kbps == 16000
+    assert video.keyframe_interval_seconds == 2.0
