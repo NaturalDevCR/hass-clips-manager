@@ -111,7 +111,12 @@ async def test_operational_actions_dispatch_only_published_worker_requests(
     monkeypatch.setattr(services, "policies_for_entry", lambda _entry: (CollectionPolicy("films"),))
 
     await services.async_run_action(hass, entry, services.SERVICE_SCAN_LIBRARY, {})
-    await services.async_run_action(hass, entry, services.SERVICE_COMPILE_ALL, {})
+    # This fixture reports a job already running, and compile_all now declines
+    # to pile onto a busy Worker, so ask explicitly to proceed to keep this
+    # test about which client method each action dispatches.
+    await services.async_run_action(
+        hass, entry, services.SERVICE_COMPILE_ALL, {"skip_if_processing": False}
+    )
     await services.async_run_action(hass, entry, services.SERVICE_RETRY_FAILED, {})
     await services.async_run_action(hass, entry, "cancel_processing", {})
     await services.async_run_action(hass, entry, "cancel_all_processing", {})
@@ -285,3 +290,87 @@ def test_services_yaml_documents_every_registered_service_input() -> None:
         for field in specification.get("fields", {}).values():
             assert field["description"]
             assert "selector" in field
+
+
+@pytest.mark.asyncio
+async def test_compile_all_queues_every_enabled_collection(hass, monkeypatch) -> None:
+    """Compiling everything must not stop after the first collection.
+
+    The Worker declines to queue while a compile job is already queued or
+    running. Passing skip_if_processing through on each request therefore made
+    this loop compile only the first collection: that first request is exactly
+    what made the Worker busy, so every collection after it returned without
+    queueing anything, and silently. The guard is about work already under way
+    before the call, so it is answered once and the per-collection requests then
+    proceed regardless of the work this call is itself creating.
+    """
+    from custom_components.cinema_collections import services
+    from custom_components.cinema_collections.const import DOMAIN
+
+    class RecordingClient:
+        def __init__(self) -> None:
+            self.compiled: list[dict[str, object]] = []
+
+        async def async_compile(self, collection_id: str, **kwargs: object) -> None:
+            self.compiled.append({"collection_id": collection_id, **kwargs})
+
+    class IdleCoordinator:
+        data = SimpleNamespace(status=SimpleNamespace(current_job=None, queue_depth=0))
+
+        async def async_request_refresh(self) -> None:
+            return None
+
+    entry = SimpleNamespace(entry_id="compile-all-entry")
+    client = RecordingClient()
+    hass.data[DOMAIN] = {
+        entry.entry_id: SimpleNamespace(
+            client=client, history=None, coordinator=IdleCoordinator(), entry=entry
+        )
+    }
+    monkeypatch.setattr(
+        services,
+        "policies_for_entry",
+        lambda _entry: (CollectionPolicy("regular"), CollectionPolicy("halloween")),
+    )
+
+    await services.async_run_action(hass, entry, services.SERVICE_COMPILE_ALL, {})
+
+    assert [call["collection_id"] for call in client.compiled] == ["regular", "halloween"]
+    assert all(call["skip_if_processing"] is False for call in client.compiled)
+
+
+@pytest.mark.asyncio
+async def test_compile_all_declines_when_the_worker_was_already_busy(hass, monkeypatch) -> None:
+    """The guard still holds for work that predates the call."""
+    from custom_components.cinema_collections import services
+    from custom_components.cinema_collections.const import DOMAIN
+
+    class RecordingClient:
+        def __init__(self) -> None:
+            self.compiled: list[str] = []
+
+        async def async_compile(self, collection_id: str, **kwargs: object) -> None:
+            self.compiled.append(collection_id)
+
+    class BusyCoordinator:
+        data = SimpleNamespace(status=SimpleNamespace(current_job={"id": "job-1"}, queue_depth=3))
+
+        async def async_request_refresh(self) -> None:
+            return None
+
+    entry = SimpleNamespace(entry_id="compile-all-busy")
+    client = RecordingClient()
+    hass.data[DOMAIN] = {
+        entry.entry_id: SimpleNamespace(
+            client=client, history=None, coordinator=BusyCoordinator(), entry=entry
+        )
+    }
+    monkeypatch.setattr(
+        services,
+        "policies_for_entry",
+        lambda _entry: (CollectionPolicy("regular"), CollectionPolicy("halloween")),
+    )
+
+    await services.async_run_action(hass, entry, services.SERVICE_COMPILE_ALL, {})
+
+    assert client.compiled == []

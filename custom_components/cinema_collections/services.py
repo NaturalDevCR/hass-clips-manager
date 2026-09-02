@@ -208,6 +208,24 @@ async def async_select_next_clip(
     }
 
 
+def _worker_is_busy(runtime: Any) -> bool:
+    """Report whether the Worker had compilation work under way already.
+
+    Read from the last coordinator snapshot rather than asking the Worker: this
+    only decides whether to start a batch, and a snapshot that is one poll old
+    cannot cause lost or duplicated work, because every request that follows
+    carries its own idempotency key.
+    """
+
+    data = getattr(runtime.coordinator, "data", None)
+    status = getattr(data, "status", None) if data is not None else None
+    if status is None:
+        return False
+    if getattr(status, "current_job", None) is not None:
+        return True
+    return int(getattr(status, "queue_depth", 0) or 0) > 0
+
+
 async def async_run_action(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -261,11 +279,20 @@ async def async_run_action(
             raise HomeAssistantError(
                 "No enabled Cinema Collections collection is available to compile"
             )
+        # The Worker refuses to queue anything while a compile job is already
+        # queued or running, so passing skip_if_processing through on every
+        # request made this loop compile the first collection and silently skip
+        # all the rest: the first request is what made the Worker busy. The
+        # guard asks whether work was already under way *before* this service
+        # call, so it is answered once, here, and the per-collection requests
+        # then go through regardless of the work this call is itself creating.
+        if bool(data.get("skip_if_processing", True)) and _worker_is_busy(runtime):
+            return None
         for collection in enabled:
             await runtime.client.async_compile(
                 collection.id,
                 strategy=cast(str, data.get("strategy", "scan_and_compile_changed_or_missing")),
-                skip_if_processing=bool(data.get("skip_if_processing", True)),
+                skip_if_processing=False,
                 idempotency_key=_key(f"compile-{collection.id}"),
             )
     elif action == SERVICE_RETRY_FAILED or action == "retry_failed":
