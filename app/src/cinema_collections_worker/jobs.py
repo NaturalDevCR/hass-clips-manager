@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from .catalog import CatalogService
+from .catalog import CatalogService, file_fingerprint
 from .database import Database
 from .ffmpeg import FfmpegCommandBuilder
 from .paths import RootKey, SafePathResolver, validate_collection_id, validate_relative_path
@@ -228,11 +228,7 @@ class JobService:
 
     @staticmethod
     def _file_fingerprint(path: Path) -> str:
-        digest = hashlib.sha256()
-        with path.open("rb") as handle:
-            for block in iter(lambda: handle.read(1024 * 1024), b""):
-                digest.update(block)
-        return digest.hexdigest()
+        return file_fingerprint(path)
 
     def _profile(self, collection_id: str) -> tuple[dict[str, Any], str]:
         row = self.db.connection.execute(
@@ -943,11 +939,7 @@ class JobWorker:
 
     @staticmethod
     def _file_fingerprint(path: Path) -> str:
-        digest = hashlib.sha256()
-        with path.open("rb") as handle:
-            for block in iter(lambda: handle.read(1024 * 1024), b""):
-                digest.update(block)
-        return digest.hexdigest()
+        return file_fingerprint(path)
 
     @staticmethod
     def _valid_output(probe: MediaProbeResult, profile: ProcessingProfile) -> bool:

@@ -36,6 +36,25 @@ class ScanSummary:
 _EXTENSIONS = {".mp4", ".m4v", ".mov", ".mkv", ".avi", ".webm", ".ts"}
 
 
+def file_fingerprint(path: Path) -> str:
+    """Return one content fingerprint for a file, used everywhere it is compared.
+
+    The catalog and the job runner each grew their own copy of this, and the two
+    drifted: one appended the byte size and the other did not. Because a
+    profile's fingerprint folds in its intro and outro asset fingerprints, any
+    profile referencing an asset produced a different value depending on which
+    copy asked. A clip would compile, record one value, and be marked stale
+    again by the very next scan comparing against the other — recompiling
+    forever and never reaching ready. One definition, one answer.
+    """
+
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return f"{digest.hexdigest()}:{path.stat().st_size}"
+
+
 class CatalogService:
     def __init__(
         self, db: Database, resolver: SafePathResolver, probe_client: _Probe | None = None
@@ -46,12 +65,7 @@ class CatalogService:
 
     @staticmethod
     def _fingerprint(path: Path) -> str:
-        digest = hashlib.sha256()
-        with path.open("rb") as handle:
-            for block in iter(lambda: handle.read(1024 * 1024), b""):
-                digest.update(block)
-        stat = path.stat()
-        return f"{digest.hexdigest()}:{stat.st_size}"
+        return file_fingerprint(path)
 
     def _files(self, root: Path) -> list[tuple[str, Path]]:
         found: list[tuple[str, Path]] = []

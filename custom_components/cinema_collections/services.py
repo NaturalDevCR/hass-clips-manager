@@ -12,6 +12,7 @@ from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, Supp
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.util.json import JsonValueType
 
+from .api_client import WorkerApiValidationError
 from .const import (
     CONF_MEDIA_URI_PREFIX,
     CONF_OVERRIDE_COLLECTION_ID,
@@ -289,12 +290,25 @@ async def async_run_action(
         # then go through regardless of the work this call is itself creating.
         if bool(data.get("skip_if_processing", True)) and _worker_is_busy(runtime):
             return None
+        # One collection must not take the others down with it. The Worker
+        # rejects a compile request for a collection with nothing eligible —
+        # a routine outcome once everything is already queued or up to date —
+        # and an unguarded loop turned that into "the first collection with
+        # nothing to do silently cancels every collection after it".
+        rejected: list[str] = []
         for collection in enabled:
-            await runtime.client.async_compile(
-                collection.id,
-                strategy=cast(str, data.get("strategy", "scan_and_compile_changed_or_missing")),
-                skip_if_processing=False,
-                idempotency_key=_key(f"compile-{collection.id}"),
+            try:
+                await runtime.client.async_compile(
+                    collection.id,
+                    strategy=cast(str, data.get("strategy", "scan_and_compile_changed_or_missing")),
+                    skip_if_processing=False,
+                    idempotency_key=_key(f"compile-{collection.id}"),
+                )
+            except WorkerApiValidationError as err:
+                rejected.append(f"{collection.id}: {err}")
+        if rejected and len(rejected) == len(enabled):
+            raise HomeAssistantError(
+                "The Worker accepted no collection for compilation. " + "; ".join(rejected)
             )
     elif action == SERVICE_RETRY_FAILED or action == "retry_failed":
         requested = data.get("collection_id")
