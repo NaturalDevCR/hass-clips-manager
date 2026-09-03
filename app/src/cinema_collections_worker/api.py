@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import shutil
 import uuid
 from collections.abc import Callable
@@ -21,6 +22,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
+from pydantic import ValidationError as PydanticValidationError
 
 from .auth import require_bearer_token, require_idempotency_key
 from .catalog import CatalogService
@@ -48,13 +50,17 @@ from .repositories import (
     ProfileRepository,
     ResourceNotFound,
 )
+from .sanitization import sanitize_message
 from .settings import WorkerSettings
 
-WORKER_VERSION = "1.6.0"
+WORKER_VERSION = "1.6.1"
 API_VERSION = "1.0.0"
 MIN_CLIENT_VERSION = "1.0.0"
 MAX_CLIENT_VERSION = "1.x"
 _ACTOR = "worker-api"
+
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class Error(BaseModel):
@@ -220,14 +226,70 @@ def _error(
     return JSONResponse(status_code=status_code, content=payload.model_dump(mode="json"))
 
 
+def _failure_detail(request: Request, exc: Exception) -> str | None:
+    """Return a redacted explanation of why a request was rejected.
+
+    Without this every rejection read "request could not be processed", which
+    is where the diagnosis stopped: a real compile returned 422 for one
+    collection and 202 for another, and neither response, container log nor
+    Home Assistant log said which field or which clip was at fault. The text is
+    redacted through the same sanitiser the job-failure reason uses, so an
+    absolute path or the bearer token can never reach a client.
+    """
+
+    if isinstance(exc, PydanticValidationError):
+        rendered: object = "; ".join(
+            f"{'.'.join(str(part) for part in error['loc']) or '(root)'}: {error['msg']}"
+            for error in exc.errors()[:5]
+        )
+    elif isinstance(exc, KeyError):
+        # KeyError stringifies to its repr, quotes included.
+        rendered = f"unknown key {exc}"
+    else:
+        rendered = exc
+    text = str(rendered).strip()
+    if not text:
+        return None
+    state = request.app.state
+    roots = getattr(getattr(state, "resolver", None), "roots", {})
+    settings = getattr(state, "settings", None)
+    secret = settings.bearer_secret.get_secret_value() if settings is not None else ""
+    return sanitize_message(
+        text,
+        roots=tuple(roots.values()) if roots else (),
+        secrets=(secret,),
+        limit=500,
+    )
+
+
 def _exception_response(request: Request, exc: Exception) -> JSONResponse:
+    detail = _failure_detail(request, exc)
+    # The response stays terse and stable; the container log keeps the whole
+    # traceback so an operator is never left without the cause.
+    _LOGGER.warning(
+        "request %s rejected: %s",
+        _request_id(request),
+        detail or type(exc).__name__,
+        exc_info=exc,
+    )
     if isinstance(exc, (IdempotencyConflict, OptimisticConflict)):
-        return _error(request, 409, "conflict", "request conflicts with current state")
+        return _error(
+            request, 409, "conflict", "request conflicts with current state", details=detail
+        )
     if isinstance(exc, (KeyError, ResourceNotFound)):
-        return _error(request, 404, "not_found", "requested resource was not found")
+        return _error(request, 404, "not_found", "requested resource was not found", details=detail)
     if isinstance(exc, ValueError):
-        return _error(request, 422, "validation_error", "request could not be processed")
-    return _error(request, 503, "unavailable", "worker dependency is unavailable", retryable=True)
+        return _error(
+            request, 422, "validation_error", "request could not be processed", details=detail
+        )
+    return _error(
+        request,
+        503,
+        "unavailable",
+        "worker dependency is unavailable",
+        details=detail,
+        retryable=True,
+    )
 
 
 def _serialize_job(job: JobRecord, request: Request) -> Job:

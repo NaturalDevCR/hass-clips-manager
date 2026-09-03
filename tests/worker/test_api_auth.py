@@ -50,7 +50,7 @@ def test_health_reports_compatible_worker_versions_and_request_id(tmp_path: Path
     assert response.json() == {
         "status": "ok",
         "component": "cinema-collections-worker",
-        "worker_version": "1.6.0",
+        "worker_version": "1.6.1",
         "api_version": "1.0.0",
         "min_client_version": "1.0.0",
         "max_client_version": "1.x",
@@ -78,3 +78,58 @@ def test_mutation_requires_nonempty_idempotency_key_and_supported_client(tmp_pat
     assert missing.json()["code"] == "validation_error"
     assert unsupported.status_code == 422
     assert unsupported.json()["code"] == "unsupported_client_version"
+
+
+def test_rejected_request_explains_the_cause_without_leaking_paths_or_token(
+    tmp_path: Path,
+) -> None:
+    """A rejection has to name its cause; "request could not be processed" is a dead end.
+
+    A real compile returned 422 for one collection and 202 for another, and
+    neither the response, the container log nor the Home Assistant log said
+    which field was at fault, so the failure could not be diagnosed at all from
+    outside the container. The detail must never carry an absolute worker path
+    or the bearer token.
+    """
+    client = _client(tmp_path)
+    headers = {"Authorization": f"Bearer {_TOKEN}", "Idempotency-Key": "create"}
+
+    response = client.post(
+        "/api/v1/collections",
+        headers=headers,
+        json={
+            "id": "films",
+            "name": "Films",
+            "source_directory": "films",
+            "processing_profile_id": "default",
+            "priority": "not-a-number",
+        },
+    )
+
+    body = response.json()
+    assert response.status_code == 422
+    assert body["code"] == "validation_error"
+    # FastAPI reports body-shape errors as its own structured list; a handler
+    # that raises reports the redacted string this module builds. Either way the
+    # cause has to be named and neither may carry a secret or a worker path.
+    detail = str(body["details"])
+    assert body["details"], "a rejected request must say why"
+    assert "priority" in detail, detail
+    assert _TOKEN not in detail
+    assert str(tmp_path) not in detail
+
+
+def test_missing_resource_names_what_was_not_found(tmp_path: Path) -> None:
+    """A 404 that does not name the missing id is as opaque as the old 422."""
+    client = _client(tmp_path)
+
+    response = client.post(
+        "/api/v1/compile",
+        headers={"Authorization": f"Bearer {_TOKEN}", "Idempotency-Key": "compile"},
+        json={"collection_id": "nope"},
+    )
+
+    body = response.json()
+    assert response.status_code == 404
+    assert "nope" in (body["details"] or "")
+    assert _TOKEN not in (body["details"] or "")
