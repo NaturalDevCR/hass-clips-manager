@@ -161,3 +161,68 @@ async def test_concurrent_service_calls_do_not_return_the_same_ready_clip(hass: 
     )
 
     assert {first.clip_id, second.clip_id} == {"clip-a", "clip-b"}
+
+
+@pytest.mark.asyncio
+async def test_selection_falls_back_to_clips_whose_output_is_stale_but_present(
+    hass: object,
+) -> None:
+    """A compiled file that still exists is playable even once its state went stale.
+
+    Editing a processing profile marks every clip in the collection stale at
+    once. Treating those as unplayable left a live install with a library full
+    of working files and nothing to show: the screen came down, the guard found
+    no clip, and the pass was skipped.
+    """
+    service = await make_service(
+        hass,
+        (
+            clip("stale-with-output", state="stale"),
+            clip("stale-no-output", state="stale", output_available=False),
+            clip("gone", state="deleted"),
+        ),
+        "selection-stale-fallback",
+    )
+
+    response = await service.async_select(SelectRequest(collection_id="films"))
+
+    assert response.clip_id == "stale-with-output"
+    assert response.media_uri == "media-source://media_source/local/films/stale-with-output.mp4"
+    assert response.output_is_stale is True
+
+
+@pytest.mark.asyncio
+async def test_selection_prefers_ready_over_stale_and_reports_it_is_current(
+    hass: object,
+) -> None:
+    """The fallback must never pull a stale output ahead of an up-to-date one."""
+    service = await make_service(
+        hass,
+        (clip("stale-with-output", state="stale"), clip("ready")),
+        "selection-prefers-ready",
+    )
+
+    response = await service.async_select(SelectRequest(collection_id="films"))
+
+    assert response.clip_id == "ready"
+    assert response.output_is_stale is False
+
+
+@pytest.mark.asyncio
+async def test_selection_returns_nothing_when_no_clip_has_an_available_output(
+    hass: object,
+) -> None:
+    """Falling back must not reach a clip with no file to play."""
+    service = await make_service(
+        hass,
+        (
+            clip("stale-no-output", state="stale", output_available=False),
+            clip("gone", state="deleted"),
+        ),
+        "selection-no-output",
+    )
+
+    response = await service.async_select(SelectRequest(collection_id="films"))
+
+    assert response.clip_id is None
+    assert response.media_uri is None

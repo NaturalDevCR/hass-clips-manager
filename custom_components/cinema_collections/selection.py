@@ -65,6 +65,7 @@ class SelectResponse:
     media_uri: str | None
     duration_seconds: float | None
     history_reset: bool
+    output_is_stale: bool = False
 
 
 class SelectionService:
@@ -97,17 +98,24 @@ class SelectionService:
             clip if isinstance(clip, ClipAvailability) else ClipAvailability.from_worker_clip(clip)
             for clip in worker_clips
         )
-        ready = tuple(
+        # A clip whose compiled file still exists is playable even when its state
+        # is no longer "ready". Editing a processing profile marks every clip in
+        # the collection stale at once, and treating those as unplayable left a
+        # library full of working files with nothing to show. Prefer up-to-date
+        # output, then fall back to whatever still has a file on disk.
+        playable = tuple(
             clip
             for clip in available
             if clip.collection_id == request.collection_id
-            and clip.state == "ready"
             and clip.output_available
             and clip.relative_output_path
+            and clip.state != "deleted"
         )
+        ready = tuple(clip for clip in playable if clip.state == "ready")
+        candidates = ready or playable
         selected = await self._history.async_select(
             request.collection_id,
-            tuple(clip.id for clip in ready),
+            tuple(clip.id for clip in candidates),
             request.dry_run,
         )
         if selected.clip_id is None:
@@ -119,7 +127,7 @@ class SelectionService:
                 duration_seconds=None,
                 history_reset=selected.history_reset,
             )
-        chosen = next(clip for clip in ready if clip.id == selected.clip_id)
+        chosen = next(clip for clip in candidates if clip.id == selected.clip_id)
         output_path = chosen.relative_output_path
         assert output_path is not None
         return SelectResponse(
@@ -129,6 +137,7 @@ class SelectionService:
             media_uri=self._media_uri_builder(output_path),
             duration_seconds=chosen.duration_seconds,
             history_reset=selected.history_reset,
+            output_is_stale=chosen.state != "ready",
         )
 
 

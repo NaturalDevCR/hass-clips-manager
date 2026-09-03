@@ -205,6 +205,7 @@ async def async_select_next_clip(
         "media_content_type": "video",
         "duration_seconds": response.duration_seconds,
         "history_reset": response.history_reset,
+        "output_is_stale": response.output_is_stale,
     }
 
 
