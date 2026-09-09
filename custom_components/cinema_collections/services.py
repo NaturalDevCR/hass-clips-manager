@@ -19,6 +19,7 @@ from .const import (
     CONF_OVERRIDE_MODE,
     DEFAULT_MEDIA_URI_PREFIX,
     DOMAIN,
+    PlaybackMode,
 )
 from .coordinator import CinemaCollectionsCoordinator, override_for_entry, policies_for_entry
 from .history import PlaybackHistoryStore
@@ -43,6 +44,8 @@ _SELECT_NEXT_SCHEMA = vol.Schema(
         **_BASE_SCHEMA,
         vol.Optional("collection_id"): _COLLECTION_ID,
         vol.Optional("dry_run", default=False): bool,
+        vol.Optional("playback_mode"): vol.In([mode.value for mode in PlaybackMode]),
+        vol.Optional("ordered_clip_ids"): vol.All([str]),
     }
 )
 _RESET_SCHEMA = vol.Schema({**_BASE_SCHEMA, vol.Optional("collection_id"): _COLLECTION_ID})
@@ -195,9 +198,7 @@ async def async_select_next_clip(
         history,
         client,
         media_uri_builder=lambda path: build_media_uri(media_uri_prefix, path),
-    ).async_select(
-        SelectRequest(collection_id=collection_id, dry_run=bool(data.get("dry_run", False)))
-    )
+    ).async_select(_select_request(data, collection_id, collections))
     return {
         "collection_id": response.collection_id,
         "clip_id": response.clip_id,
@@ -208,6 +209,33 @@ async def async_select_next_clip(
         "history_reset": response.history_reset,
         "output_is_stale": response.output_is_stale,
     }
+
+
+def _select_request(
+    data: Mapping[str, object], collection_id: str | None, collections: Sequence[CollectionPolicy]
+) -> SelectRequest:
+    policy = next((item for item in collections if item.id == collection_id), None)
+    try:
+        default_mode = policy.playback_mode if policy is not None else PlaybackMode.RANDOM
+        mode = PlaybackMode(str(data.get("playback_mode", default_mode)))
+        ids = policy.ordered_clip_ids if policy is not None and mode is PlaybackMode.CUSTOM else ()
+        if "ordered_clip_ids" in data:
+            if mode is not PlaybackMode.CUSTOM:
+                raise ValueError("ordered clip IDs require custom playback")
+            raw_ids = data["ordered_clip_ids"]
+            if not isinstance(raw_ids, (list, tuple)) or not all(
+                isinstance(value, str) for value in cast(Sequence[object], raw_ids)
+            ):
+                raise ValueError("ordered clip IDs must be a list of strings")
+            ids = tuple(cast(Sequence[str], raw_ids))
+        return SelectRequest(
+            collection_id=collection_id,
+            dry_run=bool(data.get("dry_run", False)),
+            playback_mode=mode,
+            ordered_clip_ids=ids,
+        )
+    except (TypeError, ValueError) as error:
+        raise HomeAssistantError(str(error)) from error
 
 
 def _worker_is_busy(runtime: Any) -> bool:

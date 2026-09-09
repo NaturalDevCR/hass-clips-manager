@@ -70,6 +70,40 @@ accept and returns the error in the form. The fields are:
 | Tags | Comma-separated metadata tags. |
 | Notes | Free-form notes. |
 | Enable schedule / Schedule weekdays / Schedule time / Schedule strategy / Skip schedule while processing | Optional local recurring compilation schedule. Weekdays use Python weekday values 0 (Monday) through 6 (Sunday). |
+| Playback order | `random` (default), `sequential`, or `custom`. Sequential sorts playable output by relative path casefold, original path, then clip ID. Custom uses listed IDs first, then unlisted playable clips in that same deterministic order. Missing, deleted, and unavailable IDs are skipped. |
+| Custom clip IDs | Required only for `custom`; non-empty unique IDs, one per line. Changes retain existing played history and affect only unplayed clips. |
+
+`select_next_clip` records selection claim in durable per-collection history, not actual playback success. History is shared across playback modes, survives restart, and resets only using existing history reset rules. Random mode retains existing chooser behavior. Dry runs do not mutate history.
+
+Automation can override order for one call without changing collection settings:
+
+```yaml
+action: cinema_collections.select_next_clip
+data:
+  collection_id: films
+  playback_mode: custom
+  ordered_clip_ids:
+    - 00000000-0000-0000-0000-000000000002
+    - 00000000-0000-0000-0000-000000000001
+response_variable: selected_clip
+```
+
+Use `playback_mode: sequential` without `ordered_clip_ids` for deterministic path order. `ordered_clip_ids` is rejected unless effective mode is `custom`; custom mode requires non-empty unique IDs.
+
+Replace the example IDs with actual IDs from the Library Manager. Omitting
+`playback_mode` inherits the collection setting; omitting `ordered_clip_ids` in
+custom mode inherits the saved list. A random or sequential override ignores
+the saved custom list. These overrides apply only to the current call and share
+the same collection history. To start from the beginning, explicitly reset that
+collection's history first. Two automations selecting from the same collection
+therefore advance the same round.
+
+Only clips with available compiled output participate. Ready outputs take
+precedence; stale outputs remain the existing fallback when none are ready.
+Sequential order follows the compiled relative path, which can contain generated
+IDs; use custom mode when a specific editorial sequence is required. A dry run
+does not reserve a clip, so intervening selections or catalog changes can affect
+the next result; random previews are not guaranteed to match the next selection.
 
 ## Processing profile editor
 

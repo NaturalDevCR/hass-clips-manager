@@ -14,7 +14,7 @@ from homeassistant.helpers.event import async_track_time_change
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
-from .const import DOMAIN, HistoryResetMode
+from .const import DOMAIN, HistoryResetMode, PlaybackMode
 
 _STORAGE_VERSION = 1
 _STORAGE_KEY = f"{DOMAIN}.playback_history"
@@ -97,7 +97,12 @@ class PlaybackHistoryStore:
             self._cancel_daily_reset = None
 
     async def async_select(
-        self, collection_id: str, eligible_clip_ids: Sequence[str], dry_run: bool
+        self,
+        collection_id: str,
+        eligible_clip_ids: Sequence[str],
+        dry_run: bool,
+        *,
+        playback_mode: PlaybackMode = PlaybackMode.RANDOM,
     ) -> HistorySelection:
         """Select an eligible clip and persist its claim before returning it."""
         await self.async_setup(reconcile=not dry_run)
@@ -141,7 +146,11 @@ class PlaybackHistoryStore:
                     await self._store.async_save(self._serialized())
                 return HistorySelection(collection_id, None, round_number, history_reset)
 
-            clip_id = self._chooser(remaining)
+            clip_id = (
+                remaining[0]
+                if PlaybackMode(playback_mode) is not PlaybackMode.RANDOM
+                else self._chooser(remaining)
+            )
             if clip_id not in remaining:
                 raise ValueError("history chooser must return an eligible clip ID")
             if dry_run:

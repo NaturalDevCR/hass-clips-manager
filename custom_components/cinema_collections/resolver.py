@@ -11,6 +11,8 @@ from typing import ClassVar
 
 from homeassistant.util import dt as dt_util
 
+from .const import PlaybackMode, normalize_clip_order
+
 _COLLECTION_ID = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
 
@@ -82,6 +84,8 @@ class CollectionPolicy:
     ends_at: datetime | None = None
     is_default: bool = False
     allow_manual_override: bool = True
+    playback_mode: PlaybackMode = PlaybackMode.RANDOM
+    ordered_clip_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not _COLLECTION_ID.fullmatch(self.id):
@@ -95,6 +99,12 @@ class CollectionPolicy:
             and self.starts_at > self.ends_at
         ):
             raise ValueError("collection policy window end must not precede its start")
+        mode = PlaybackMode(self.playback_mode)
+        object.__setattr__(self, "playback_mode", mode)
+        normalized = normalize_clip_order(self.ordered_clip_ids)
+        object.__setattr__(self, "ordered_clip_ids", normalized)
+        if mode is PlaybackMode.CUSTOM and not normalized:
+            raise ValueError("custom playback requires ordered clip IDs")
 
     @property
     def collection_id(self) -> str:

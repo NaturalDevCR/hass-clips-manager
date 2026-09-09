@@ -22,7 +22,14 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.util import dt as dt_util
 
 from .api_client import WorkerApiClient, WorkerApiError
-from .const import CONF_ENDPOINT, CONF_TOKEN, SUBENTRY_COLLECTION, SUBENTRY_PROFILE
+from .const import (
+    CONF_ENDPOINT,
+    CONF_TOKEN,
+    SUBENTRY_COLLECTION,
+    SUBENTRY_PROFILE,
+    PlaybackMode,
+    normalize_clip_order,
+)
 from .models import WorkerProfileSummary
 from .resolver import CollectionPolicy
 from .scheduler import CompilationSchedule, schedules_from_mapping
@@ -71,6 +78,8 @@ class CollectionSubentryData:
     notes: str | None = None
     schedule: Mapping[str, object] = field(default_factory=lambda: {})
     worker_revision: int | None = None
+    playback_mode: PlaybackMode = PlaybackMode.RANDOM
+    ordered_clip_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         _check_identifier(self.collection_id, "collection ID")
@@ -83,6 +92,12 @@ class CollectionSubentryData:
             raise ValueError("schedule window end must not precede its start")
         if self.worker_revision is not None and self.worker_revision < 1:
             raise ValueError("Worker revision must be positive")
+        mode = PlaybackMode(self.playback_mode)
+        object.__setattr__(self, "playback_mode", mode)
+        ordered = normalize_clip_order(self.ordered_clip_ids)
+        object.__setattr__(self, "ordered_clip_ids", ordered)
+        if mode is PlaybackMode.CUSTOM and not ordered:
+            raise ValueError("custom playback requires ordered clip IDs")
 
     def with_updates(self, **changes: object) -> CollectionSubentryData:
         """Return changed immutable policy data while preserving its stable ID."""
@@ -107,6 +122,8 @@ class CollectionSubentryData:
             "notes": self.notes,
             "schedule": dict(self.schedule),
             "worker_revision": self.worker_revision,
+            "playback_mode": self.playback_mode.value,
+            "ordered_clip_ids": list(self.ordered_clip_ids),
         }
 
     @classmethod
@@ -126,6 +143,11 @@ class CollectionSubentryData:
         ends_at = data.get("ends_at")
         notes = data.get("notes")
         revision = data.get("worker_revision")
+        raw_order = data.get("ordered_clip_ids", ())
+        if not isinstance(raw_order, (list, tuple)) or not all(
+            isinstance(value, str) for value in cast(Sequence[object], raw_order)
+        ):
+            raise ValueError("ordered clip IDs must be strings")
         return cls(
             collection_id=str(data["collection_id"]),
             name=str(data["name"]),
@@ -141,6 +163,8 @@ class CollectionSubentryData:
             notes=notes if isinstance(notes, str) else None,
             schedule=schedule,
             worker_revision=revision if isinstance(revision, int) else None,
+            playback_mode=PlaybackMode(str(data.get("playback_mode", PlaybackMode.RANDOM.value))),
+            ordered_clip_ids=tuple(cast(str, value) for value in cast(Sequence[object], raw_order)),
         )
 
     def to_policy(self) -> CollectionPolicy:
@@ -153,6 +177,8 @@ class CollectionSubentryData:
             ends_at=_optional_datetime(self.ends_at),
             is_default=self.is_default,
             allow_manual_override=self.allow_manual_override,
+            playback_mode=self.playback_mode,
+            ordered_clip_ids=self.ordered_clip_ids,
         )
 
     def schedules(self) -> tuple[CompilationSchedule, ...]:
@@ -790,6 +816,21 @@ def _collection_schema(
             vol.Required(
                 "allow_manual_override", default=values.get("allow_manual_override", True)
             ): bool,
+            vol.Required(
+                "playback_mode", default=values.get("playback_mode", PlaybackMode.RANDOM.value)
+            ): selector.SelectSelector(  # pyright: ignore[reportUnknownMemberType]
+                selector.SelectSelectorConfig(
+                    options=[mode.value for mode in PlaybackMode],
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                    translation_key="playback_mode",
+                )
+            ),
+            vol.Optional(
+                "ordered_clip_ids",
+                default="\n".join(existing.ordered_clip_ids if existing is not None else ()),
+            ): selector.TextSelector(  # pyright: ignore[reportUnknownMemberType]
+                selector.TextSelectorConfig(multiline=True)
+            ),
             vol.Optional("tags", default=", ".join(str(tag) for tag in tags)): str,
             vol.Optional("notes", default=values.get("notes") or ""): str,
             vol.Required("schedule_enabled", default=schedule.get("enabled", False)): bool,
@@ -837,6 +878,12 @@ def _collection_from_flow_input(
         "strategy": str(user_input["schedule_strategy"]),
         "skip_if_processing": bool(user_input["schedule_skip_if_processing"]),
     }
+    playback_mode = PlaybackMode(str(user_input.get("playback_mode", PlaybackMode.RANDOM.value)))
+    ordered_clip_ids = tuple(
+        value.strip()
+        for value in str(user_input.get("ordered_clip_ids", "")).splitlines()
+        if value.strip()
+    )
     # Validate schedule shape now, returning errors in the same flow that supplied it.
     CompilationSchedule(
         collection_id=collection_id,
@@ -863,6 +910,8 @@ def _collection_from_flow_input(
         notes=str(user_input.get("notes") or "") or None,
         schedule=schedule,
         worker_revision=existing.worker_revision if existing else None,
+        playback_mode=playback_mode,
+        ordered_clip_ids=ordered_clip_ids,
     )
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import cast
 
 DOMAIN = "cinema_collections"
 
@@ -22,6 +23,27 @@ class HistoryResetMode(StrEnum):
 
     ON_EXHAUSTION = "on_exhaustion"
     DAILY = "daily"
+
+
+class PlaybackMode(StrEnum):
+    """Per-collection clip selection order."""
+
+    RANDOM = "random"
+    SEQUENTIAL = "sequential"
+    CUSTOM = "custom"
+
+
+def normalize_clip_order(value: object) -> tuple[str, ...]:
+    """Validate ordered stable IDs at configuration and service boundaries."""
+    if not isinstance(value, (list, tuple)):
+        raise ValueError("ordered clip IDs must be a list of strings")
+    values = cast(list[object] | tuple[object, ...], value)
+    if any(not isinstance(item, str) for item in values):
+        raise ValueError("ordered clip IDs must be strings")
+    ordered = tuple(cast(str, item).strip() for item in values)
+    if any(not item for item in ordered) or len(ordered) != len(set(ordered)):
+        raise ValueError("ordered clip IDs must be non-empty and unique")
+    return ordered
 
 
 DEFAULT_MEDIA_URI_PREFIX = "media-source://media_source/local/cinema-collections/compiled"
