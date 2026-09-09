@@ -4,6 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="csrf-token" content="{{ csrf_token }}">
+    <meta name="order-bridge-capability" content="{{ order_bridge_capability }}">
     <title>Cinema Collections Library Manager</title>
     <link rel="stylesheet" href="static/manager.css?v={{ asset_version }}">
   </head>
@@ -13,6 +14,7 @@
       <p>Files are managed through their catalog record. Source and compiled output are always selected separately.</p>
       <div class="tablist" role="tablist" aria-label="Library Manager sections">
         <button type="button" role="tab" id="tab-library" aria-controls="panel-library" aria-selected="true" data-tab="library">Library</button>
+        <button type="button" role="tab" id="tab-order" aria-controls="panel-order" aria-selected="false" data-tab="order">Playback order</button>
         <button type="button" role="tab" id="tab-add" aria-controls="panel-add" aria-selected="false" data-tab="add">Add clips</button>
         <button type="button" role="tab" id="tab-assets" aria-controls="panel-assets" aria-selected="false" data-tab="assets">Assets</button>
         <button type="button" role="tab" id="tab-maintenance" aria-controls="panel-maintenance" aria-selected="false" data-tab="maintenance">Maintenance</button>
@@ -24,10 +26,31 @@
           <h2>Library</h2>
           <div class="table-scroll">
             <table id="clips-table">
-              <thead><tr><th>Collection</th><th>Source</th><th>State</th><th>Output</th><th>Duration</th><th>Tags</th><th>Actions</th></tr></thead>
+              <thead><tr><th>Collection</th><th>Source</th><th>State</th><th>Output</th><th>Duration</th><th>Tags</th><th>Clip ID</th><th>Actions</th></tr></thead>
               <tbody>{{ clip_rows }}</tbody>
             </table>
           </div>
+        </section>
+      </div>
+      <div role="tabpanel" id="panel-order" aria-labelledby="tab-order" data-panel="order" hidden>
+        <section>
+          <h2>Playback order</h2>
+          <p>Drag clips, or focus a drag handle and use the arrow keys, to arrange the
+            custom playback order for one collection. Saving sends the order to Home
+            Assistant; when the bridge is unavailable, use Copy IDs and paste the list
+            into the collection's Playback order settings instead.</p>
+          <div class="order-controls">
+            <label for="order-collection">Collection</label>
+            <select id="order-collection">{{ collection_options }}</select>
+          </div>
+          <ul id="order-list" aria-label="Playback order" aria-live="polite"></ul>
+          <p id="order-empty" class="field-hint" hidden>No catalogued clips for this collection yet.</p>
+          <div class="order-actions">
+            <button type="button" id="order-save">Save order</button>
+            <button type="button" id="order-copy">Copy IDs</button>
+            <button type="button" id="order-reset">Reset to path order</button>
+          </div>
+          <p id="order-result" role="status"></p>
         </section>
       </div>
       <div role="tabpanel" id="panel-add" aria-labelledby="tab-add" data-panel="add" hidden>
@@ -347,10 +370,44 @@
         } catch (error) { result.textContent = error.message; }
       }
 
+      // Copies text through the Clipboard API when available, with a
+      // textarea-based fallback for non-secure contexts that withhold it.
+      async function copyText(text) {
+        if (navigator.clipboard && window.isSecureContext) {
+          await navigator.clipboard.writeText(text);
+          return;
+        }
+        const area = document.createElement('textarea');
+        area.value = text;
+        area.setAttribute('readonly', '');
+        area.style.position = 'fixed';
+        area.style.opacity = '0';
+        document.body.appendChild(area);
+        area.select();
+        try {
+          if (!document.execCommand('copy')) throw new Error('copy command rejected');
+        } finally {
+          area.remove();
+        }
+      }
+
       document.querySelectorAll('[data-action]').forEach(button => button.addEventListener('click', () => {
         const row = button.closest('[data-clip-id]');
         const id = row.dataset.clipId;
         const action = button.dataset.action;
+        if (action === 'copy-id') {
+          (async () => {
+            const label = button.textContent;
+            try {
+              await copyText(id);
+              button.textContent = 'Copied';
+            } catch {
+              button.textContent = 'Copy failed';
+            }
+            setTimeout(() => { button.textContent = label; }, 1500);
+          })();
+          return;
+        }
         if (action === 'manage-toggle') {
           const panelRow = row.nextElementSibling;
           panelRow.hidden = !panelRow.hidden;
@@ -416,6 +473,294 @@
           location.reload();
         } catch (error) { result.textContent = error.message; }
       }));
+
+      // ---- Playback order editor ----
+      // The catalog model is derived from the server-rendered library rows;
+      // the editor never touches Worker write routes. The Home Assistant
+      // bridge is the page's only absolute URL: it lives at the domain root,
+      // outside the Ingress prefix, so it must be built as a same-origin
+      // absolute URL while every Worker route stays relative.
+      const ORDER_BRIDGE_PATH = '/api/cinema_collections/order';
+      const ORDER_BRIDGE_CAPABILITY = document.querySelector(
+        'meta[name="order-bridge-capability"]'
+      ).content;
+      const ORDER_BRIDGE_HEADER = 'X-Cinema-Collections-Order-Capability';
+      const orderSelect = document.getElementById('order-collection');
+      const orderList = document.getElementById('order-list');
+      const orderEmpty = document.getElementById('order-empty');
+      const orderSave = document.getElementById('order-save');
+      const orderCopy = document.getElementById('order-copy');
+      const orderReset = document.getElementById('order-reset');
+      const orderResult = document.getElementById('order-result');
+
+      const catalogClips = Array.from(
+        document.querySelectorAll('#clips-table tbody tr[data-clip-id]:not(.row-panel-row)')
+      ).map(row => {
+        const sourcePath = row.dataset.sourcePath || '';
+        return {
+          id: row.dataset.clipId,
+          collection: row.dataset.collection || '',
+          sourcePath,
+          outputPath: row.dataset.outputPath || '',
+          sequentialRank: Number(row.dataset.sequentialRank || 0),
+          sourceName: sourcePath.split('/').pop() || sourcePath,
+          state: row.dataset.state || '',
+          durationSeconds: Number(row.dataset.durationSeconds || 0),
+        };
+      });
+
+      // Mirrors the integration's deterministic sequential order: relative
+      // path casefold, then the original path, then the clip ID.
+      function deterministicClipCompare(a, b) {
+        if (a.sequentialRank !== b.sequentialRank) {
+          return a.sequentialRank - b.sequentialRank;
+        }
+        const pathA = a.outputPath || a.sourcePath;
+        const pathB = b.outputPath || b.sourcePath;
+        const foldA = pathA.toLowerCase();
+        const foldB = pathB.toLowerCase();
+        if (foldA !== foldB) return foldA < foldB ? -1 : 1;
+        if (pathA !== pathB) return pathA < pathB ? -1 : 1;
+        if (a.id === b.id) return 0;
+        return a.id < b.id ? -1 : 1;
+      }
+
+      function formatOrderDuration(seconds) {
+        if (!seconds || seconds <= 0) return '—';
+        const total = Math.floor(seconds);
+        return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
+      }
+
+      function orderBridgeUrl() {
+        return new URL(ORDER_BRIDGE_PATH, window.location.origin);
+      }
+
+      function orderBridgeHeaders(extra = {}) {
+        return {
+          ...extra,
+          [ORDER_BRIDGE_HEADER]: ORDER_BRIDGE_CAPABILITY,
+        };
+      }
+
+      // available:false also covers "bridge answered but rejected the
+      // collection", where saving makes no sense either.
+      async function bridgeGetOrder(collection) {
+        const url = orderBridgeUrl();
+        url.searchParams.set('collection_id', collection);
+        try {
+          const response = await fetch(url, {
+            headers: orderBridgeHeaders({'Accept': 'application/json'}),
+          });
+          if (!response.ok) {
+            let message = `Home Assistant bridge returned HTTP ${response.status}.`;
+            try {
+              const body = await response.json();
+              if (body && typeof body.message === 'string') message = body.message;
+            } catch { /* response was not a JSON error */ }
+            return {available: false, ids: [], error: message};
+          }
+          const body = await response.json();
+          const ids = Array.isArray(body.ordered_clip_ids)
+            ? body.ordered_clip_ids.filter(id => typeof id === 'string')
+            : [];
+          return {available: true, ids: body.playback_mode === 'custom' ? ids : []};
+        } catch {
+          return {available: false, ids: []};
+        }
+      }
+
+      let orderIds = [];
+      let orderClips = [];
+      let catalogOrderClips = [];
+      let orderBridgeAvailable = false;
+
+      function setOrderStatus(message, isError) {
+        orderResult.classList.toggle('is-error', Boolean(isError));
+        orderResult.textContent = message;
+      }
+
+      function updateOrderControls() {
+        orderSelect.disabled = orderSelect.options.length === 0;
+        orderSave.disabled = !orderBridgeAvailable || orderIds.length === 0;
+        orderCopy.disabled = orderIds.length === 0;
+        orderReset.disabled = orderIds.length === 0;
+      }
+
+      function renderOrderList() {
+        orderList.textContent = '';
+        const byId = new Map(orderClips.map(clip => [clip.id, clip]));
+        orderEmpty.hidden = orderIds.length > 0;
+        orderIds.forEach(id => {
+          const clip = byId.get(id);
+          if (!clip) return;
+          const item = document.createElement('li');
+          item.className = 'order-row';
+          item.draggable = true;
+          item.dataset.clipId = id;
+
+          // The handle is a real button so keyboard users get focus and a
+          // name; ArrowUp/ArrowDown reorder without a pointer.
+          const handle = document.createElement('button');
+          handle.type = 'button';
+          handle.className = 'order-handle';
+          handle.textContent = '⠿';
+          handle.setAttribute('aria-label', `Reorder ${clip.sourceName}`);
+          handle.addEventListener('keydown', event => {
+            const index = orderIds.indexOf(id);
+            const target = event.key === 'ArrowUp' ? index - 1
+              : event.key === 'ArrowDown' ? index + 1
+              : -1;
+            if (target < 0 || target >= orderIds.length) return;
+            event.preventDefault();
+            orderIds.splice(index, 1);
+            orderIds.splice(target, 0, id);
+            renderOrderList();
+            const moved = orderList.children[target];
+            if (moved) moved.querySelector('.order-handle').focus();
+          });
+          item.appendChild(handle);
+
+          const name = document.createElement('span');
+          name.className = 'order-name';
+          name.textContent = clip.sourceName;
+          name.title = clip.sourcePath;
+          item.appendChild(name);
+
+          const duration = document.createElement('span');
+          duration.className = 'order-duration';
+          duration.textContent = formatOrderDuration(clip.durationSeconds);
+          item.appendChild(duration);
+
+          const state = document.createElement('span');
+          state.className = 'order-state';
+          state.textContent = clip.state;
+          item.appendChild(state);
+
+          const code = document.createElement('code');
+          code.className = 'order-id';
+          code.textContent = clip.id;
+          item.appendChild(code);
+
+          item.addEventListener('dragstart', event => {
+            event.dataTransfer.effectAllowed = 'move';
+            event.dataTransfer.setData('text/plain', id);
+            item.classList.add('dragging');
+          });
+          item.addEventListener('dragend', () => item.classList.remove('dragging'));
+          item.addEventListener('dragover', event => {
+            event.preventDefault();
+            event.dataTransfer.dropEffect = 'move';
+          });
+          item.addEventListener('drop', event => {
+            event.preventDefault();
+            const draggedId = event.dataTransfer.getData('text/plain');
+            const from = orderIds.indexOf(draggedId);
+            const to = orderIds.indexOf(id);
+            if (from < 0 || to < 0 || from === to) return;
+            orderIds.splice(from, 1);
+            orderIds.splice(from < to ? to - 1 : to, 0, draggedId);
+            renderOrderList();
+          });
+          orderList.appendChild(item);
+        });
+      }
+
+      async function loadOrder(collection) {
+        catalogOrderClips = catalogClips
+          .filter(clip => clip.collection === collection)
+          .sort(deterministicClipCompare);
+        orderClips = [...catalogOrderClips];
+        const bridge = await bridgeGetOrder(collection);
+        orderBridgeAvailable = bridge.available;
+        if (bridge.available && bridge.ids.length > 0) {
+          const known = new Map(orderClips.map(clip => [clip.id, clip]));
+          const saved = bridge.ids.map(id => known.get(id) || {
+            id,
+            collection,
+            sourcePath: 'Not in the current Worker catalog',
+            outputPath: '',
+            sourceName: 'Unavailable clip',
+            state: 'unavailable',
+            durationSeconds: 0,
+          });
+          const rest = orderClips.map(clip => clip.id)
+            .filter(knownId => !bridge.ids.includes(knownId));
+          orderClips = [...saved, ...orderClips.filter(clip => rest.includes(clip.id))];
+          orderIds = orderClips.map(clip => clip.id);
+          setOrderStatus('Loaded the saved custom order from Home Assistant.', false);
+        } else {
+          orderIds = orderClips.map(clip => clip.id);
+          setOrderStatus(
+            bridge.available
+              ? 'No saved custom order; showing the deterministic path order.'
+              : 'The Home Assistant bridge is unavailable here, so Save order is disabled. '
+                + (bridge.error && bridge.error.includes('Multiple Cinema Collections entries')
+                  ? 'Multiple Cinema Collections entries are loaded; select the target entry '
+                    + 'in Home Assistant, then use Copy IDs for manual configuration.'
+                  : 'Use Copy IDs and paste the list into the collection\'s Playback order settings.'),
+            !bridge.available
+          );
+        }
+        renderOrderList();
+        updateOrderControls();
+      }
+
+      let orderCollections = Array.from(orderSelect.options).map(option => option.value);
+      if (orderCollections.length === 0) {
+        Array.from(new Set(catalogClips.map(clip => clip.collection))).sort().forEach(collection => {
+          const option = document.createElement('option');
+          option.value = collection;
+          option.textContent = collection;
+          orderSelect.appendChild(option);
+        });
+        orderCollections = Array.from(orderSelect.options).map(option => option.value);
+      }
+      if (orderCollections.length === 0) {
+        setOrderStatus('No catalogued clips yet. Add clips from the Library tab first.', false);
+        updateOrderControls();
+      } else {
+        orderSelect.addEventListener('change', () => loadOrder(orderSelect.value));
+        loadOrder(orderSelect.value);
+      }
+
+      orderSave.addEventListener('click', async () => {
+        orderSave.disabled = true;
+        try {
+          const response = await fetch(orderBridgeUrl(), {
+            method: 'POST',
+            headers: orderBridgeHeaders({
+              'Content-Type': 'application/json', 'Accept': 'application/json',
+            }),
+            body: JSON.stringify({collection_id: orderSelect.value, ordered_clip_ids: orderIds}),
+          });
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          setOrderStatus('Order saved to Home Assistant.', false);
+        } catch (error) {
+          // Never claim a silent success: the local arrangement stays intact
+          // and the copy fallback remains one click away.
+          setOrderStatus(
+            `The order was not saved (${error.message}). Your arrangement is unchanged `
+              + '— use Copy IDs to keep it.',
+            true
+          );
+        }
+        updateOrderControls();
+      });
+
+      orderCopy.addEventListener('click', async () => {
+        try {
+          await copyText(orderIds.join('\n'));
+          setOrderStatus(`Copied ${orderIds.length} clip IDs, one per line.`, false);
+        } catch {
+          setOrderStatus('Copy failed — select the IDs and copy them manually.', true);
+        }
+      });
+
+      orderReset.addEventListener('click', () => {
+        orderIds = catalogOrderClips.map(clip => clip.id);
+        renderOrderList();
+        setOrderStatus('Reset to the deterministic path order. Save to apply it.', false);
+      });
 
       document.getElementById('directory-form').addEventListener('submit', async event => {
         event.preventDefault();

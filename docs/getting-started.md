@@ -191,6 +191,14 @@ The Library Manager polls the queued job and shows its live stage and
 percentage while it runs. The integration's **Current job progress** sensor
 (`current_job_progress`) reports the same percentage for your dashboard.
 
+Optional: to control the exact playback sequence, open the Library Manager's
+**Playback order** tab, pick the collection, and arrange the clips by
+drag-and-drop (or with the arrow keys on a row's drag handle). **Save order**
+stores the custom order in the collection's settings through the Home
+Assistant bridge; if Save is disabled because the bridge is unavailable, use
+**Copy IDs** and paste the list into the collection's **Custom clip IDs**
+field with **Playback order** set to `custom`.
+
 ## 12. Select the result from an automation
 
 Verify selection before wiring it into an automation. In Developer Tools, call

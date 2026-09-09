@@ -17,6 +17,39 @@ The secret is a random 256-bit value configured out of band. It is never
 returned in a response, logged, or included in diagnostics. Invalid or missing
 credentials receive `401` with the standard error object.
 
+## Home Assistant visual-order bridge
+
+The Library Manager's visual editor uses the integration route
+`/api/cinema_collections/order`, not the Worker API. It is available only from
+the Home Assistant origin and accepts collection and stable clip IDs only. The
+Manager emits a five-minute, path-scoped capability derived from the already
+shared Worker bearer secret and sends it in
+`X-Cinema-Collections-Order-Capability`; the integration validates that
+capability against its configured Worker token. A normal Home Assistant
+bearer/signed request is also accepted when the route is called directly.
+
+```text
+GET  /api/cinema_collections/order?collection_id=<id>&entry_id=<optional>
+POST /api/cinema_collections/order
+```
+
+The POST body is:
+
+```json
+{
+  "collection_id": "christmas",
+  "ordered_clip_ids": ["clip-b", "clip-a"],
+  "entry_id": "optional-when-multiple-entries-are-loaded"
+}
+```
+
+The response returns `entry_id`, `collection_id`, `playback_mode` (always
+`custom` after a successful save), and the normalized ordered ID list. The
+bridge persists the list in the Home Assistant collection subentry. It never
+accepts filesystem paths or Worker bearer credentials. When the App is run as
+external Docker, or when multiple integration entries make `entry_id`
+ambiguous, the Manager disables Save and provides a copy-to-clipboard fallback.
+
 ## Compatibility and versioning
 
 The URL prefix is versioned; v1 clients must use `/api/v1`. `GET /api/v1/health`

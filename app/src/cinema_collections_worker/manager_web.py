@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import hmac
 import html
 import json
@@ -29,9 +31,12 @@ def _worker_version() -> str:
 
 _COOKIE = "cinema_collections_manager"
 _SESSION_SECONDS = 60 * 60
+_ORDER_CAPABILITY_HEADER = "X-Cinema-Collections-Order-Capability"
+_ORDER_CAPABILITY_PATH = "/api/cinema_collections/order"
+_ORDER_CAPABILITY_SECONDS = 5 * 60
 # Column count of the clip table, used by both the colspan on the expandable
 # panel row and the empty-state placeholder so neither can drift apart.
-_CLIP_TABLE_COLUMNS = 7
+_CLIP_TABLE_COLUMNS = 8
 
 
 class _MetadataBody(BaseModel):
@@ -112,7 +117,7 @@ def _format_duration(seconds: float) -> str:
     return f"{minutes}:{remainder:02d}"
 
 
-def _render_clip_row(row: Any) -> str:
+def _render_clip_row(row: Any, *, sequential_rank: int) -> str:
     metadata = json.loads(row["metadata"] or "{}")
     tags = ", ".join(metadata.get("tags") or [])
     notes = str(metadata.get("notes") or "")
@@ -145,14 +150,21 @@ def _render_clip_row(row: Any) -> str:
     )
     # Both rows carry the clip identity and the paths the panel's handlers
     # read back off row.dataset (the source cell only exists on the data row).
+    # The data row also carries the collection, state, and duration the
+    # playback-order editor reads when it builds its catalog model.
     return (
         '<tr data-clip-id="{id}" data-output-path="{output}" '
-        'data-source-path="{source_path}" title="{id}">'
+        'data-source-path="{source_path}" data-collection="{collection}" '
+        'data-state="{state}" data-duration-seconds="{duration_seconds}" '
+        'data-sequential-rank="{sequential_rank}" title="{id}">'
         "<td>{collection}</td>"
         '<td title="{source_path}">{source_name}{failure}</td>'
         "<td>{state}</td>"
         "{output_cell}"
         "<td>{duration_cell}</td><td>{tags}</td>"
+        '<td class="clip-id"><code>{id}</code> '
+        '<button type="button" data-action="copy-id" '
+        'aria-label="Copy clip ID {id}">Copy ID</button></td>'
         '<td class="actions">'
         '<button data-action="recompile">Recompile</button> '
         '<button data-action="manage-toggle" aria-expanded="false">Manage</button>'
@@ -182,14 +194,16 @@ def _render_clip_row(row: Any) -> str:
         '<button type="submit">Move</button></form></div>'
         "</div></td></tr>".format(
             id=html.escape(str(row["id"]), quote=True),
-            collection=html.escape(str(row["collection_id"])),
+            collection=html.escape(str(row["collection_id"]), quote=True),
             source_path=html.escape(source_value, quote=True),
             source_name=html.escape(source_name, quote=True),
             failure=failure,
-            state=html.escape(state),
+            state=html.escape(state, quote=True),
             output=html.escape(output_value, quote=True),
             output_cell=output_cell,
             duration_cell=duration_cell,
+            duration_seconds=f"{duration_seconds:g}",
+            sequential_rank=sequential_rank,
             tags=html.escape(tags, quote=True),
             notes=html.escape(notes),
             targets=target_option,
@@ -199,15 +213,57 @@ def _render_clip_row(row: Any) -> str:
     )
 
 
-def _render_manager(request: Request, csrf: str) -> str:
+def _order_bridge_capability(settings: WorkerSettings) -> str:
+    """Create a short-lived capability for the HA order bridge.
+
+    The browser must not receive the long-lived Worker bearer secret. The
+    integration validates this scoped capability against the same secret it
+    already stores for Worker API calls.
+    """
+    expires = int(time.time()) + _ORDER_CAPABILITY_SECONDS
+    nonce = secrets.token_urlsafe(18)
+    payload = f"{_ORDER_CAPABILITY_PATH}|{expires}|{nonce}".encode()
+    signature = hmac.new(
+        settings.bearer_secret.get_secret_value().encode(), payload, hashlib.sha256
+    ).digest()
+    encoded_payload = base64.urlsafe_b64encode(payload).decode().rstrip("=")
+    encoded_signature = base64.urlsafe_b64encode(signature).decode().rstrip("=")
+    return f"{encoded_payload}.{encoded_signature}"
+
+
+def _render_manager(request: Request, csrf: str, settings: WorkerSettings) -> str:
     database = request.app.state.database
     rows = database.connection.execute(
         "SELECT id, collection_id, relative_source_path, relative_output_path, state, "
         "output_available, duration_seconds, metadata FROM clips "
         "WHERE state <> 'deleted' ORDER BY updated_at DESC, id DESC"
     ).fetchall()
+    collection_rows = database.connection.execute(
+        "SELECT id, name FROM collections ORDER BY name COLLATE NOCASE, id"
+    ).fetchall()
+    collection_options = "".join(
+        f'<option value="{html.escape(str(row["id"]), quote=True)}">'
+        f"{html.escape(str(row['name']))}</option>"
+        for row in collection_rows
+    )
+    by_collection: dict[str, list[Any]] = {}
+    for row in rows:
+        by_collection.setdefault(str(row["collection_id"]), []).append(row)
+    sequential_ranks: dict[str, int] = {}
+    for collection_rows_for_rank in by_collection.values():
+        ordered_rows = sorted(
+            collection_rows_for_rank,
+            key=lambda row: (
+                str(row["relative_output_path"] or "").casefold(),
+                str(row["relative_output_path"] or ""),
+                str(row["id"]),
+            ),
+        )
+        sequential_ranks.update({str(row["id"]): rank for rank, row in enumerate(ordered_rows)})
     clip_rows = (
-        "".join(_render_clip_row(row) for row in rows)
+        "".join(
+            _render_clip_row(row, sequential_rank=sequential_ranks[str(row["id"])]) for row in rows
+        )
         or f'<tr><td colspan="{_CLIP_TABLE_COLUMNS}">No catalogued clips yet.</td></tr>'
     )
     template = (
@@ -216,7 +272,12 @@ def _render_manager(request: Request, csrf: str) -> str:
     return (
         template.replace("{{ clip_rows }}", clip_rows)
         .replace("{{ csrf_token }}", html.escape(csrf, quote=True))
+        .replace(
+            "{{ order_bridge_capability }}",
+            html.escape(_order_bridge_capability(settings), quote=True),
+        )
         .replace("{{ asset_version }}", html.escape(_worker_version(), quote=True))
+        .replace("{{ collection_options }}", collection_options)
     )
 
 
@@ -239,7 +300,7 @@ def install_manager_routes(app: FastAPI, settings: WorkerSettings) -> None:
             _sessions(app)[session] = (csrf, time.monotonic() + _SESSION_SECONDS)
         else:
             session, csrf = record
-        page = HTMLResponse(_render_manager(request, csrf))
+        page = HTMLResponse(_render_manager(request, csrf, settings))
         page.set_cookie(
             _COOKIE,
             session,
