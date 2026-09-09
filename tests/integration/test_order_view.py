@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
+import time
 from types import SimpleNamespace
 
 import pytest
 
 from custom_components.cinema_collections.const import DOMAIN, SUBENTRY_COLLECTION
 from custom_components.cinema_collections.order_view import (
+    ORDER_CAPABILITY_HEADER,
+    ORDER_VIEW_URL,
     CinemaCollectionsOrderView,
     async_get_collection_order,
     async_save_collection_order,
@@ -54,7 +60,11 @@ def _hass(*, entry_count: int = 1):
             data=collection.as_dict(),
             title=collection.name,
         )
-        entry = SimpleNamespace(entry_id=entry_id, subentries={subentry.subentry_id: subentry})
+        entry = SimpleNamespace(
+            entry_id=entry_id,
+            data={"token": "0123456789abcdefghijklmnopqrstuvwxyzABCDEFG"},
+            subentries={subentry.subentry_id: subentry},
+        )
         entries[entry_id] = entry
     runtime = {
         entry_id: SimpleNamespace(entry=entry, coordinator=Coordinator())
@@ -64,6 +74,18 @@ def _hass(*, entry_count: int = 1):
         data={DOMAIN: runtime},
         config_entries=ConfigEntries(),
     ), entries
+
+
+def _capability() -> str:
+    payload = f"{ORDER_VIEW_URL}|{int(time.time()) + 300}|test-nonce".encode()
+    signature = hmac.new(
+        b"0123456789abcdefghijklmnopqrstuvwxyzABCDEFG", payload, hashlib.sha256
+    ).digest()
+
+    def encode(value: bytes) -> str:
+        return base64.urlsafe_b64encode(value).decode().rstrip("=")
+
+    return f"{encode(payload)}.{encode(signature)}"
 
 
 @pytest.mark.asyncio
@@ -132,6 +154,11 @@ async def test_order_http_view_get_and_post_use_json_contract() -> None:
     class Request:
         app = {"hass": hass}
         query = {"collection_id": "films"}
+        headers = {ORDER_CAPABILITY_HEADER: _capability()}
+
+        @staticmethod
+        def get(key, default=None):
+            return default
 
         async def json(self):
             return {"collection_id": "films", "ordered_clip_ids": ["clip-b", "clip-a"]}
@@ -143,3 +170,25 @@ async def test_order_http_view_get_and_post_use_json_contract() -> None:
     post_response = await view.post(Request())
     assert post_response.status == 200
     assert '"ordered_clip_ids":["clip-b","clip-a"]' in post_response.text
+
+
+@pytest.mark.asyncio
+async def test_order_http_view_rejects_missing_or_invalid_capability() -> None:
+    hass, _ = _hass()
+    view = CinemaCollectionsOrderView()
+
+    class Request:
+        app = {"hass": hass}
+        query = {"collection_id": "films"}
+        headers = {}
+
+        @staticmethod
+        def get(key, default=None):
+            return default
+
+    response = await view.get(Request())
+    assert response.status == 401
+
+    Request.headers = {ORDER_CAPABILITY_HEADER: "not-valid"}
+    response = await view.get(Request())
+    assert response.status == 401

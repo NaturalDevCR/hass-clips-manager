@@ -4,6 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="csrf-token" content="{{ csrf_token }}">
+    <meta name="order-bridge-capability" content="{{ order_bridge_capability }}">
     <title>Cinema Collections Library Manager</title>
     <link rel="stylesheet" href="static/manager.css?v={{ asset_version }}">
   </head>
@@ -480,6 +481,10 @@
       // outside the Ingress prefix, so it must be built as a same-origin
       // absolute URL while every Worker route stays relative.
       const ORDER_BRIDGE_PATH = '/api/cinema_collections/order';
+      const ORDER_BRIDGE_CAPABILITY = document.querySelector(
+        'meta[name="order-bridge-capability"]'
+      ).content;
+      const ORDER_BRIDGE_HEADER = 'X-Cinema-Collections-Order-Capability';
       const orderSelect = document.getElementById('order-collection');
       const orderList = document.getElementById('order-list');
       const orderEmpty = document.getElementById('order-empty');
@@ -530,13 +535,22 @@
         return new URL(ORDER_BRIDGE_PATH, window.location.origin);
       }
 
+      function orderBridgeHeaders(extra = {}) {
+        return {
+          ...extra,
+          [ORDER_BRIDGE_HEADER]: ORDER_BRIDGE_CAPABILITY,
+        };
+      }
+
       // available:false also covers "bridge answered but rejected the
       // collection", where saving makes no sense either.
       async function bridgeGetOrder(collection) {
         const url = orderBridgeUrl();
         url.searchParams.set('collection_id', collection);
         try {
-          const response = await fetch(url, {headers: {'Accept': 'application/json'}});
+          const response = await fetch(url, {
+            headers: orderBridgeHeaders({'Accept': 'application/json'}),
+          });
           if (!response.ok) {
             let message = `Home Assistant bridge returned HTTP ${response.status}.`;
             try {
@@ -557,6 +571,7 @@
 
       let orderIds = [];
       let orderClips = [];
+      let catalogOrderClips = [];
       let orderBridgeAvailable = false;
 
       function setOrderStatus(message, isError) {
@@ -651,9 +666,10 @@
       }
 
       async function loadOrder(collection) {
-        orderClips = catalogClips
+        catalogOrderClips = catalogClips
           .filter(clip => clip.collection === collection)
           .sort(deterministicClipCompare);
+        orderClips = [...catalogOrderClips];
         const bridge = await bridgeGetOrder(collection);
         orderBridgeAvailable = bridge.available;
         if (bridge.available && bridge.ids.length > 0) {
@@ -712,7 +728,9 @@
         try {
           const response = await fetch(orderBridgeUrl(), {
             method: 'POST',
-            headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
+            headers: orderBridgeHeaders({
+              'Content-Type': 'application/json', 'Accept': 'application/json',
+            }),
             body: JSON.stringify({collection_id: orderSelect.value, ordered_clip_ids: orderIds}),
           });
           if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -739,7 +757,7 @@
       });
 
       orderReset.addEventListener('click', () => {
-        orderIds = orderClips.map(clip => clip.id);
+        orderIds = catalogOrderClips.map(clip => clip.id);
         renderOrderList();
         setOrderStatus('Reset to the deterministic path order. Save to apply it.', false);
       });

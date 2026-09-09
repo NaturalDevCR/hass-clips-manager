@@ -8,7 +8,7 @@ The Worker requires a high-entropy bearer secret. Store it only in the Worker op
 
 The supervised App uses private App networking and Ingress rather than a public host port. External Docker should use a private network without published ports. If a LAN endpoint is unavoidable, allow only trusted private CIDRs and terminate TLS at a trusted reverse proxy. Do not expose the Worker directly to the internet.
 
-The Library Manager's playback-order editor saves through the integration's authenticated bridge (`/api/cinema_collections/order`), which requires a logged-in Home Assistant user session and accepts only collection IDs and clip IDs — never filesystem paths or Worker credentials. The page reaches the bridge with a single same-origin absolute URL; all Worker routes remain relative to the Ingress prefix. When the bridge is unavailable, the editor only offers clipboard export and sends nothing anywhere else.
+The Library Manager's playback-order editor saves through the integration's authenticated bridge (`/api/cinema_collections/order`). The Worker page receives only a five-minute, path-scoped capability derived from the shared Worker secret; it never embeds or sends that long-lived secret. The integration validates the capability against its configured Worker token, and direct Home Assistant bearer/signed requests remain supported. The bridge accepts only collection IDs and clip IDs — never filesystem paths. The page reaches the bridge with a single same-origin absolute URL; all Worker routes remain relative to the Ingress prefix. When the bridge is unavailable, the editor only offers clipboard export and sends nothing anywhere else.
 
 ## Filesystem safety
 

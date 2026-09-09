@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import hmac
 import html
 import json
@@ -29,6 +31,9 @@ def _worker_version() -> str:
 
 _COOKIE = "cinema_collections_manager"
 _SESSION_SECONDS = 60 * 60
+_ORDER_CAPABILITY_HEADER = "X-Cinema-Collections-Order-Capability"
+_ORDER_CAPABILITY_PATH = "/api/cinema_collections/order"
+_ORDER_CAPABILITY_SECONDS = 5 * 60
 # Column count of the clip table, used by both the colspan on the expandable
 # panel row and the empty-state placeholder so neither can drift apart.
 _CLIP_TABLE_COLUMNS = 8
@@ -208,7 +213,25 @@ def _render_clip_row(row: Any, *, sequential_rank: int) -> str:
     )
 
 
-def _render_manager(request: Request, csrf: str) -> str:
+def _order_bridge_capability(settings: WorkerSettings) -> str:
+    """Create a short-lived capability for the HA order bridge.
+
+    The browser must not receive the long-lived Worker bearer secret. The
+    integration validates this scoped capability against the same secret it
+    already stores for Worker API calls.
+    """
+    expires = int(time.time()) + _ORDER_CAPABILITY_SECONDS
+    nonce = secrets.token_urlsafe(18)
+    payload = f"{_ORDER_CAPABILITY_PATH}|{expires}|{nonce}".encode()
+    signature = hmac.new(
+        settings.bearer_secret.get_secret_value().encode(), payload, hashlib.sha256
+    ).digest()
+    encoded_payload = base64.urlsafe_b64encode(payload).decode().rstrip("=")
+    encoded_signature = base64.urlsafe_b64encode(signature).decode().rstrip("=")
+    return f"{encoded_payload}.{encoded_signature}"
+
+
+def _render_manager(request: Request, csrf: str, settings: WorkerSettings) -> str:
     database = request.app.state.database
     rows = database.connection.execute(
         "SELECT id, collection_id, relative_source_path, relative_output_path, state, "
@@ -249,6 +272,10 @@ def _render_manager(request: Request, csrf: str) -> str:
     return (
         template.replace("{{ clip_rows }}", clip_rows)
         .replace("{{ csrf_token }}", html.escape(csrf, quote=True))
+        .replace(
+            "{{ order_bridge_capability }}",
+            html.escape(_order_bridge_capability(settings), quote=True),
+        )
         .replace("{{ asset_version }}", html.escape(_worker_version(), quote=True))
         .replace("{{ collection_options }}", collection_options)
     )
@@ -273,7 +300,7 @@ def install_manager_routes(app: FastAPI, settings: WorkerSettings) -> None:
             _sessions(app)[session] = (csrf, time.monotonic() + _SESSION_SECONDS)
         else:
             session, csrf = record
-        page = HTMLResponse(_render_manager(request, csrf))
+        page = HTMLResponse(_render_manager(request, csrf, settings))
         page.set_cookie(
             _COOKIE,
             session,

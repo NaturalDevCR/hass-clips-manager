@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
+import hashlib
+import hmac
+import time
 from collections.abc import Mapping, Sequence
 from typing import Any, cast
 
@@ -9,10 +14,12 @@ from aiohttp import web
 from homeassistant.config_entries import ConfigEntry, ConfigSubentry
 from homeassistant.helpers.http import HomeAssistantView
 
-from .const import DOMAIN, SUBENTRY_COLLECTION, PlaybackMode, normalize_clip_order
+from .const import CONF_TOKEN, DOMAIN, SUBENTRY_COLLECTION, PlaybackMode, normalize_clip_order
 from .subentries import CollectionSubentryData, async_update_collection_subentry
 
 ORDER_VIEW_URL = "/api/cinema_collections/order"
+ORDER_CAPABILITY_HEADER = "X-Cinema-Collections-Order-Capability"
+_CAPABILITY_MAX_FUTURE_SECONDS = 10 * 60
 
 
 def _loaded_entries(hass: Any) -> Mapping[str, Any]:
@@ -20,6 +27,45 @@ def _loaded_entries(hass: Any) -> Mapping[str, Any]:
     if not isinstance(runtimes, Mapping):
         return {}
     return cast(Mapping[str, Any], runtimes)
+
+
+def _capability_is_valid(hass: Any, supplied: str | None) -> bool:
+    """Validate the short-lived capability emitted by the Worker Manager."""
+    if not supplied:
+        return False
+    try:
+        encoded_payload, encoded_signature = supplied.split(".", 1)
+        padding = "=" * (-len(encoded_payload) % 4)
+        payload = base64.urlsafe_b64decode(encoded_payload + padding)
+        signature_padding = "=" * (-len(encoded_signature) % 4)
+        signature = base64.urlsafe_b64decode(encoded_signature + signature_padding)
+        path, raw_expiry, _nonce = payload.decode().split("|", 2)
+        expiry = int(raw_expiry)
+    except (ValueError, UnicodeDecodeError, binascii.Error):
+        return False
+    now = int(time.time())
+    if path != ORDER_VIEW_URL or expiry <= now or expiry > now + _CAPABILITY_MAX_FUTURE_SECONDS:
+        return False
+    for runtime in _loaded_entries(hass).values():
+        entry = getattr(runtime, "entry", None)
+        raw_data: object = getattr(entry, "data", {})
+        data: Mapping[str, object] = {}
+        if isinstance(raw_data, Mapping):
+            data = cast(Mapping[str, object], raw_data)
+        token: object = data.get(CONF_TOKEN)
+        if not isinstance(token, str) or not token:
+            continue
+        expected = hmac.new(token.encode(), payload, hashlib.sha256).digest()
+        if hmac.compare_digest(expected, signature):
+            return True
+    return False
+
+
+def _request_is_authenticated(hass: Any, request: web.Request) -> bool:
+    """Accept normal HA auth or the scoped Worker Manager capability."""
+    if request.get("hass_user") is not None or request.get("authenticated", False):
+        return True
+    return _capability_is_valid(hass, request.headers.get(ORDER_CAPABILITY_HEADER))
 
 
 def _entry_for(hass: Any, entry_id: str | None) -> tuple[ConfigEntry, Any]:
@@ -94,14 +140,20 @@ async def async_save_collection_order(
 
 
 class CinemaCollectionsOrderView(HomeAssistantView):
-    """Authenticated same-origin API used by the Worker App's order editor."""
+    """Capability-authenticated API used by the Worker App's order editor."""
 
     url = ORDER_VIEW_URL
     name = "api:cinema_collections:order"
-    requires_auth = True
+    # The Worker Manager cannot attach Home Assistant's bearer token to a
+    # browser request. It sends a short-lived capability derived from the
+    # already-shared Worker token instead; normal HA bearer/signed auth is also
+    # accepted by _request_is_authenticated.
+    requires_auth = False
 
     async def get(self, request: web.Request) -> web.Response:
         """Return one collection's saved order."""
+        if not _request_is_authenticated(request.app["hass"], request):
+            return self.json_message("Authentication required", status_code=401)
         try:
             result = await async_get_collection_order(
                 request.app["hass"],
@@ -114,6 +166,8 @@ class CinemaCollectionsOrderView(HomeAssistantView):
 
     async def post(self, request: web.Request) -> web.Response:
         """Save one collection's custom order."""
+        if not _request_is_authenticated(request.app["hass"], request):
+            return self.json_message("Authentication required", status_code=401)
         try:
             payload = await request.json()
             if not isinstance(payload, Mapping):

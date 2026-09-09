@@ -870,6 +870,9 @@ def test_manager_order_editor_uses_same_origin_absolute_bridge_url_only(tmp_path
     assert "window.location.origin" in html
     assert "new URL(ORDER_BRIDGE_PATH, window.location.origin)" in html
     assert "ordered_clip_ids" in html
+    assert 'name="order-bridge-capability"' in html
+    assert "X-Cinema-Collections-Order-Capability" in html
+    assert "new URL(ORDER_BRIDGE_PATH, window.location.origin)" in html
     # No absolute Worker URLs snuck in with the new UI.
     assert "fetch('/" not in html
     assert 'fetch("/' not in html
@@ -915,3 +918,4 @@ def test_manager_order_reset_uses_compiled_output_path_and_preserves_saved_missi
     assert "pathA.toLowerCase()" in html
     assert "Unavailable clip" in html
     assert "bridge.ids.map" in html
+    assert "catalogOrderClips.map(clip => clip.id)" in html

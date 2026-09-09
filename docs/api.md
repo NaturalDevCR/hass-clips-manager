@@ -21,8 +21,12 @@ credentials receive `401` with the standard error object.
 
 The Library Manager's visual editor uses the integration route
 `/api/cinema_collections/order`, not the Worker API. It is available only from
-the Home Assistant origin, requires the logged-in Home Assistant user session,
-and accepts collection and stable clip IDs only.
+the Home Assistant origin and accepts collection and stable clip IDs only. The
+Manager emits a five-minute, path-scoped capability derived from the already
+shared Worker bearer secret and sends it in
+`X-Cinema-Collections-Order-Capability`; the integration validates that
+capability against its configured Worker token. A normal Home Assistant
+bearer/signed request is also accepted when the route is called directly.
 
 ```text
 GET  /api/cinema_collections/order?collection_id=<id>&entry_id=<optional>
