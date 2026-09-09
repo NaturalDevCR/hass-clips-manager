@@ -422,6 +422,8 @@ async def test_collection_subentry_flow_creates_and_reconfigures_with_worker_rev
         item for item in entry.subentries.values() if item.subentry_type == SUBENTRY_COLLECTION
     )
     assert subentry.data["collection_id"] == "films"
+    assert subentry.data["playback_mode"] == "random"
+    assert subentry.data["ordered_clip_ids"] == []
     aioclient_mock.patch("http://worker.local/api/v1/collections/films", json={"revision": 2})
     reconfigure = await hass.config_entries.subentries.async_init(
         (entry.entry_id, SUBENTRY_COLLECTION),
@@ -429,6 +431,8 @@ async def test_collection_subentry_flow_creates_and_reconfigures_with_worker_rev
         data={
             "collection_id": "films",
             "name": "New Films",
+            "playback_mode": "custom",
+            "ordered_clip_ids": "clip-b\nclip-a",
             "source_directory": "films",
             "processing_profile_id": "4k",
             "enabled": True,
@@ -443,6 +447,32 @@ async def test_collection_subentry_flow_creates_and_reconfigures_with_worker_rev
 
     assert reconfigure["type"] == "abort"
     assert entry.subentries[subentry.subentry_id].data["name"] == "New Films"
+    saved = entry.subentries[subentry.subentry_id].data
+    assert saved["playback_mode"] == "custom"
+    assert saved["ordered_clip_ids"] == ["clip-b", "clip-a"]
+    collection = CollectionSubentryData.from_dict(saved)
+    assert collection.to_policy().ordered_clip_ids == ("clip-b", "clip-a")
+    assert "playback_mode" not in collection.worker_create_payload()
+    assert "ordered_clip_ids" not in collection.worker_patch_payload()
+    schema = _collection_schema(collection)
+    values = {str(key): key.default() for key in schema.schema}
+    assert values["playback_mode"] == "custom"
+    assert values["ordered_clip_ids"] == "clip-b\nclip-a"
+
+
+@pytest.mark.parametrize("order", [[], ["a", "a"], [" "], [42]])
+def test_invalid_custom_collection_order(order):
+    with pytest.raises(ValueError):
+        CollectionSubentryData.from_dict(
+            {
+                "collection_id": "films",
+                "name": "Films",
+                "source_directory": "films",
+                "processing_profile_id": "4k",
+                "playback_mode": "custom",
+                "ordered_clip_ids": order,
+            }
+        )
 
 
 @pytest.mark.asyncio

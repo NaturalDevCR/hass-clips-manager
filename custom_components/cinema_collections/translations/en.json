@@ -51,7 +51,9 @@
         "user": {
           "data_description": {
             "processing_profile_id": "Which processing profile compiles this collection. The built-in compatibility profile cannot be edited; add a processing profile of your own to change encoding, intro or outro settings.",
-            "source_directory": "Folder holding this collection's source files, relative to the Worker's source root. Use a plain name such as halloween, not a full path."
+            "source_directory": "Folder holding this collection's source files, relative to the Worker's source root. Use a plain name such as halloween, not a full path.",
+            "playback_mode": "Default order for this collection. Automations can override it for one selection.",
+            "ordered_clip_ids": "One clip ID per line, in playback order. Required for custom mode. Copy IDs from the Library Manager; unlisted available clips follow afterward."
           },
           "data": {
             "collection_id": "Collection ID",
@@ -70,7 +72,9 @@
             "schedule_weekdays": "Schedule weekdays",
             "schedule_time": "Schedule time",
             "schedule_strategy": "Schedule strategy",
-            "schedule_skip_if_processing": "Skip schedule while processing"
+            "schedule_skip_if_processing": "Skip schedule while processing",
+            "playback_mode": "Playback order",
+            "ordered_clip_ids": "Custom clip IDs"
           }
         },
         "reconfigure": {
@@ -91,7 +95,13 @@
             "schedule_weekdays": "Schedule weekdays",
             "schedule_time": "Schedule time",
             "schedule_strategy": "Schedule strategy",
-            "schedule_skip_if_processing": "Skip schedule while processing"
+            "schedule_skip_if_processing": "Skip schedule while processing",
+            "playback_mode": "Playback order",
+            "ordered_clip_ids": "Custom clip IDs"
+          },
+          "data_description": {
+            "playback_mode": "Default order for this collection. Automations can override it for one selection.",
+            "ordered_clip_ids": "One clip ID per line, in playback order. Required for custom mode. Copy IDs from the Library Manager; unlisted available clips follow afterward."
           }
         }
       },
@@ -186,25 +196,59 @@
   },
   "entity": {
     "sensor": {
-      "active_collection": {"name": "Active collection"},
-      "processing_status": {"name": "Processing status"},
-      "queue_depth": {"name": "Queue depth"},
-      "latest_error": {"name": "Latest Worker error"},
-      "current_job_progress": {"name": "Current job progress"},
-      "worker_version": {"name": "Worker version"},
-      "next_schedule": {"name": "Next compilation schedule"},
-      "collection_priorities": {"name": "Collection priorities"},
-      "compilation_summary": {"name": "Compilation summary"},
-      "clip_states": {"name": "Clip states"}
+      "active_collection": {
+        "name": "Active collection"
+      },
+      "processing_status": {
+        "name": "Processing status"
+      },
+      "queue_depth": {
+        "name": "Queue depth"
+      },
+      "latest_error": {
+        "name": "Latest Worker error"
+      },
+      "current_job_progress": {
+        "name": "Current job progress"
+      },
+      "worker_version": {
+        "name": "Worker version"
+      },
+      "next_schedule": {
+        "name": "Next compilation schedule"
+      },
+      "collection_priorities": {
+        "name": "Collection priorities"
+      },
+      "compilation_summary": {
+        "name": "Compilation summary"
+      },
+      "clip_states": {
+        "name": "Clip states"
+      }
     },
     "button": {
-      "scan_library": {"name": "Scan library"},
-      "compile_all": {"name": "Compile all collections"},
-      "retry_failed": {"name": "Retry failed compilation"},
-      "cancel_processing": {"name": "Cancel processing"},
-      "cancel_all_processing": {"name": "Cancel all processing"},
-      "cleanup_temporaries": {"name": "Clean up temporary files"},
-      "reset_history": {"name": "Reset playback history"}
+      "scan_library": {
+        "name": "Scan library"
+      },
+      "compile_all": {
+        "name": "Compile all collections"
+      },
+      "retry_failed": {
+        "name": "Retry failed compilation"
+      },
+      "cancel_processing": {
+        "name": "Cancel processing"
+      },
+      "cancel_all_processing": {
+        "name": "Cancel all processing"
+      },
+      "cleanup_temporaries": {
+        "name": "Clean up temporary files"
+      },
+      "reset_history": {
+        "name": "Reset playback history"
+      }
     },
     "select": {
       "collection_override": {
@@ -221,80 +265,160 @@
       "name": "Select next clip",
       "description": "Select the next ready compiled clip without controlling playback.",
       "fields": {
-        "entry_id": {"name": "Config entry", "description": "Optional entry when more than one Worker is loaded."},
-        "collection_id": {"name": "Collection", "description": "Optional collection ID; the active policy is used when omitted."},
-        "dry_run": {"name": "Dry run", "description": "Preview the selected clip without recording playback history."}
+        "entry_id": {
+          "name": "Config entry",
+          "description": "Optional entry when more than one Worker is loaded."
+        },
+        "collection_id": {
+          "name": "Collection",
+          "description": "Optional collection ID; the active policy is used when omitted."
+        },
+        "dry_run": {
+          "name": "Dry run",
+          "description": "Preview the selected clip without recording playback history."
+        },
+        "playback_mode": {
+          "name": "Playback order",
+          "description": "Optional order for this call only; omitted uses collection setting."
+        },
+        "ordered_clip_ids": {
+          "name": "Ordered clip IDs",
+          "description": "Custom mode only. Non-empty unique IDs, one per line; unlisted playable clips follow deterministic sequential order."
+        }
       },
       "response": {
-        "media_content_id": {"name": "Media source URI", "description": "The selected clip's Media Source URI."},
-        "media_content_type": {"name": "Media content type", "description": "Always video."}
+        "media_content_id": {
+          "name": "Media source URI",
+          "description": "The selected clip's Media Source URI."
+        },
+        "media_content_type": {
+          "name": "Media content type",
+          "description": "Always video."
+        }
       }
     },
     "reset_history": {
       "name": "Reset playback history",
       "description": "Reset no-repeat history globally or for one collection.",
       "fields": {
-        "entry_id": {"name": "Config entry", "description": "Optional entry when more than one Worker is loaded."},
-        "collection_id": {"name": "Collection", "description": "Optional collection ID; omit to reset all histories."}
+        "entry_id": {
+          "name": "Config entry",
+          "description": "Optional entry when more than one Worker is loaded."
+        },
+        "collection_id": {
+          "name": "Collection",
+          "description": "Optional collection ID; omit to reset all histories."
+        }
       }
     },
     "scan_library": {
       "name": "Scan library",
       "description": "Ask the Worker to scan configured source collections.",
       "fields": {
-        "entry_id": {"name": "Config entry", "description": "Optional entry when more than one Worker is loaded."},
-        "collection_ids": {"name": "Collections", "description": "Optional list of collection IDs; omit to scan all collections."}
+        "entry_id": {
+          "name": "Config entry",
+          "description": "Optional entry when more than one Worker is loaded."
+        },
+        "collection_ids": {
+          "name": "Collections",
+          "description": "Optional list of collection IDs; omit to scan all collections."
+        }
       }
     },
     "compile_collection": {
       "name": "Compile collection",
       "description": "Ask the Worker to compile one configured collection.",
       "fields": {
-        "entry_id": {"name": "Config entry", "description": "Optional entry when more than one Worker is loaded."},
-        "collection_id": {"name": "Collection", "description": "Configured collection ID to compile."},
-        "strategy": {"name": "Strategy", "description": "Worker compilation strategy."},
-        "skip_if_processing": {"name": "Skip while processing", "description": "Do not queue work while the Worker is already processing."}
+        "entry_id": {
+          "name": "Config entry",
+          "description": "Optional entry when more than one Worker is loaded."
+        },
+        "collection_id": {
+          "name": "Collection",
+          "description": "Configured collection ID to compile."
+        },
+        "strategy": {
+          "name": "Strategy",
+          "description": "Worker compilation strategy."
+        },
+        "skip_if_processing": {
+          "name": "Skip while processing",
+          "description": "Do not queue work while the Worker is already processing."
+        }
       }
     },
     "compile_all": {
       "name": "Compile all collections",
       "description": "Ask the Worker to compile every enabled configured collection.",
       "fields": {
-        "entry_id": {"name": "Config entry", "description": "Optional entry when more than one Worker is loaded."},
-        "strategy": {"name": "Strategy", "description": "Worker compilation strategy for every enabled collection."},
-        "skip_if_processing": {"name": "Skip while processing", "description": "Do not queue work while the Worker is already processing."}
+        "entry_id": {
+          "name": "Config entry",
+          "description": "Optional entry when more than one Worker is loaded."
+        },
+        "strategy": {
+          "name": "Strategy",
+          "description": "Worker compilation strategy for every enabled collection."
+        },
+        "skip_if_processing": {
+          "name": "Skip while processing",
+          "description": "Do not queue work while the Worker is already processing."
+        }
       }
     },
     "retry_failed": {
       "name": "Retry failed compilation",
       "description": "Re-request stale compilation work for configured collections.",
       "fields": {
-        "entry_id": {"name": "Config entry", "description": "Optional entry when more than one Worker is loaded."},
-        "collection_id": {"name": "Collection", "description": "Optional collection ID; omit to retry every enabled collection."}
+        "entry_id": {
+          "name": "Config entry",
+          "description": "Optional entry when more than one Worker is loaded."
+        },
+        "collection_id": {
+          "name": "Collection",
+          "description": "Optional collection ID; omit to retry every enabled collection."
+        }
       }
     },
     "cancel_processing": {
       "name": "Cancel processing",
       "description": "Cooperatively cancel the active Worker job without deleting output.",
       "fields": {
-        "entry_id": {"name": "Config entry", "description": "Optional entry when more than one Worker is loaded."},
-        "job_id": {"name": "Job", "description": "Optional Worker job ID; omit to cancel the reported job."}
+        "entry_id": {
+          "name": "Config entry",
+          "description": "Optional entry when more than one Worker is loaded."
+        },
+        "job_id": {
+          "name": "Job",
+          "description": "Optional Worker job ID; omit to cancel the reported job."
+        }
       }
     },
     "cancel_all_processing": {
       "name": "Cancel all processing",
       "description": "Cancel the active Worker job and every queued job.",
       "fields": {
-        "entry_id": {"name": "Config entry", "description": "Optional entry when more than one Worker is loaded."}
+        "entry_id": {
+          "name": "Config entry",
+          "description": "Optional entry when more than one Worker is loaded."
+        }
       }
     },
     "set_collection_override": {
       "name": "Set collection override",
       "description": "Set automatic, default, or explicit collection selection policy.",
       "fields": {
-        "entry_id": {"name": "Config entry", "description": "Optional entry when more than one Worker is loaded."},
-        "mode": {"name": "Mode", "description": "Automatic follows policy, default uses the configured default, and explicit uses a collection."},
-        "collection_id": {"name": "Collection", "description": "Required for explicit mode; it must be enabled and allow manual override."}
+        "entry_id": {
+          "name": "Config entry",
+          "description": "Optional entry when more than one Worker is loaded."
+        },
+        "mode": {
+          "name": "Mode",
+          "description": "Automatic follows policy, default uses the configured default, and explicit uses a collection."
+        },
+        "collection_id": {
+          "name": "Collection",
+          "description": "Required for explicit mode; it must be enabled and allow manual override."
+        }
       }
     }
   },
@@ -317,6 +441,13 @@
         "scan_and_compile_changed_or_missing": "Scan and compile changed or missing clips",
         "compile_stale_only": "Compile stale clips only",
         "scan_only": "Scan only"
+      }
+    },
+    "playback_mode": {
+      "options": {
+        "random": "Random",
+        "sequential": "Sequential",
+        "custom": "Custom order"
       }
     }
   }

@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Protocol
 from urllib.parse import quote
 
+from .const import PlaybackMode, normalize_clip_order
 from .history import PlaybackHistoryStore
 from .models import WorkerClip
 
@@ -49,10 +50,20 @@ class SelectRequest:
 
     collection_id: str | None = None
     dry_run: bool = False
+    playback_mode: PlaybackMode | str = PlaybackMode.RANDOM
+    ordered_clip_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if self.collection_id is not None and not self.collection_id:
             raise ValueError("select request requires a collection ID")
+        mode = PlaybackMode(self.playback_mode)
+        object.__setattr__(self, "playback_mode", mode)
+        ordered = normalize_clip_order(self.ordered_clip_ids)
+        if mode is PlaybackMode.CUSTOM and not ordered:
+            raise ValueError("custom playback requires ordered clip IDs")
+        if mode is not PlaybackMode.CUSTOM and ordered:
+            raise ValueError("ordered clip IDs require custom playback")
+        object.__setattr__(self, "ordered_clip_ids", ordered)
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,10 +124,20 @@ class SelectionService:
         )
         ready = tuple(clip for clip in playable if clip.state == "ready")
         candidates = ready or playable
+        if request.playback_mode is not PlaybackMode.RANDOM:
+            sequential = tuple(sorted(candidates, key=_sequential_key))
+            if request.playback_mode is PlaybackMode.CUSTOM:
+                by_id = {clip.id: clip for clip in sequential}
+                candidates = tuple(
+                    by_id[clip_id] for clip_id in request.ordered_clip_ids if clip_id in by_id
+                ) + tuple(clip for clip in sequential if clip.id not in request.ordered_clip_ids)
+            else:
+                candidates = sequential
         selected = await self._history.async_select(
             request.collection_id,
             tuple(clip.id for clip in candidates),
             request.dry_run,
+            playback_mode=PlaybackMode(request.playback_mode),
         )
         if selected.clip_id is None:
             return SelectResponse(
@@ -144,6 +165,11 @@ class SelectionService:
 def _default_media_uri(relative_output_path: str) -> str:
     """Build the default Home Assistant media-source URI from a Worker-relative path."""
     return f"media-source://media_source/local/{quote(relative_output_path, safe='/')}"
+
+
+def _sequential_key(clip: ClipAvailability) -> tuple[str, str, str]:
+    path = clip.relative_output_path or ""
+    return (path.casefold(), path, clip.id)
 
 
 def normalize_media_uri_prefix(value: object) -> str:

@@ -277,7 +277,13 @@ def test_services_yaml_documents_every_registered_service_input() -> None:
     )
 
     assert {name: set(spec.get("fields", {})) for name, spec in document.items()} == {
-        "select_next_clip": {"entry_id", "collection_id", "dry_run"},
+        "select_next_clip": {
+            "entry_id",
+            "collection_id",
+            "dry_run",
+            "playback_mode",
+            "ordered_clip_ids",
+        },
         "reset_history": {"entry_id", "collection_id"},
         "scan_library": {"entry_id", "collection_ids"},
         "compile_collection": {"entry_id", "collection_id", "strategy", "skip_if_processing"},

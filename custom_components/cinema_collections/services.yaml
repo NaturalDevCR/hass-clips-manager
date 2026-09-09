@@ -15,6 +15,20 @@ select_next_clip:
       description: Preview the next clip without recording playback history.
       selector:
         boolean:
+    playback_mode:
+      description: Optional mode for this selection only. Omit to use the collection setting.
+      selector:
+        select:
+          translation_key: playback_mode
+          options:
+            - random
+            - sequential
+            - custom
+    ordered_clip_ids:
+      description: Optional ordered clip IDs for custom mode. Omit to use the collection order. Unlisted available clips follow afterward.
+      selector:
+        text:
+          multiple: true
   response:
     optional: false
     content:
