@@ -31,7 +31,7 @@ _COOKIE = "cinema_collections_manager"
 _SESSION_SECONDS = 60 * 60
 # Column count of the clip table, used by both the colspan on the expandable
 # panel row and the empty-state placeholder so neither can drift apart.
-_CLIP_TABLE_COLUMNS = 7
+_CLIP_TABLE_COLUMNS = 8
 
 
 class _MetadataBody(BaseModel):
@@ -112,7 +112,7 @@ def _format_duration(seconds: float) -> str:
     return f"{minutes}:{remainder:02d}"
 
 
-def _render_clip_row(row: Any) -> str:
+def _render_clip_row(row: Any, *, sequential_rank: int) -> str:
     metadata = json.loads(row["metadata"] or "{}")
     tags = ", ".join(metadata.get("tags") or [])
     notes = str(metadata.get("notes") or "")
@@ -145,14 +145,21 @@ def _render_clip_row(row: Any) -> str:
     )
     # Both rows carry the clip identity and the paths the panel's handlers
     # read back off row.dataset (the source cell only exists on the data row).
+    # The data row also carries the collection, state, and duration the
+    # playback-order editor reads when it builds its catalog model.
     return (
         '<tr data-clip-id="{id}" data-output-path="{output}" '
-        'data-source-path="{source_path}" title="{id}">'
+        'data-source-path="{source_path}" data-collection="{collection}" '
+        'data-state="{state}" data-duration-seconds="{duration_seconds}" '
+        'data-sequential-rank="{sequential_rank}" title="{id}">'
         "<td>{collection}</td>"
         '<td title="{source_path}">{source_name}{failure}</td>'
         "<td>{state}</td>"
         "{output_cell}"
         "<td>{duration_cell}</td><td>{tags}</td>"
+        '<td class="clip-id"><code>{id}</code> '
+        '<button type="button" data-action="copy-id" '
+        'aria-label="Copy clip ID {id}">Copy ID</button></td>'
         '<td class="actions">'
         '<button data-action="recompile">Recompile</button> '
         '<button data-action="manage-toggle" aria-expanded="false">Manage</button>'
@@ -182,14 +189,16 @@ def _render_clip_row(row: Any) -> str:
         '<button type="submit">Move</button></form></div>'
         "</div></td></tr>".format(
             id=html.escape(str(row["id"]), quote=True),
-            collection=html.escape(str(row["collection_id"])),
+            collection=html.escape(str(row["collection_id"]), quote=True),
             source_path=html.escape(source_value, quote=True),
             source_name=html.escape(source_name, quote=True),
             failure=failure,
-            state=html.escape(state),
+            state=html.escape(state, quote=True),
             output=html.escape(output_value, quote=True),
             output_cell=output_cell,
             duration_cell=duration_cell,
+            duration_seconds=f"{duration_seconds:g}",
+            sequential_rank=sequential_rank,
             tags=html.escape(tags, quote=True),
             notes=html.escape(notes),
             targets=target_option,
@@ -206,8 +215,32 @@ def _render_manager(request: Request, csrf: str) -> str:
         "output_available, duration_seconds, metadata FROM clips "
         "WHERE state <> 'deleted' ORDER BY updated_at DESC, id DESC"
     ).fetchall()
+    collection_rows = database.connection.execute(
+        "SELECT id, name FROM collections ORDER BY name COLLATE NOCASE, id"
+    ).fetchall()
+    collection_options = "".join(
+        f'<option value="{html.escape(str(row["id"]), quote=True)}">'
+        f"{html.escape(str(row['name']))}</option>"
+        for row in collection_rows
+    )
+    by_collection: dict[str, list[Any]] = {}
+    for row in rows:
+        by_collection.setdefault(str(row["collection_id"]), []).append(row)
+    sequential_ranks: dict[str, int] = {}
+    for collection_rows_for_rank in by_collection.values():
+        ordered_rows = sorted(
+            collection_rows_for_rank,
+            key=lambda row: (
+                str(row["relative_output_path"] or "").casefold(),
+                str(row["relative_output_path"] or ""),
+                str(row["id"]),
+            ),
+        )
+        sequential_ranks.update({str(row["id"]): rank for rank, row in enumerate(ordered_rows)})
     clip_rows = (
-        "".join(_render_clip_row(row) for row in rows)
+        "".join(
+            _render_clip_row(row, sequential_rank=sequential_ranks[str(row["id"])]) for row in rows
+        )
         or f'<tr><td colspan="{_CLIP_TABLE_COLUMNS}">No catalogued clips yet.</td></tr>'
     )
     template = (
@@ -217,6 +250,7 @@ def _render_manager(request: Request, csrf: str) -> str:
         template.replace("{{ clip_rows }}", clip_rows)
         .replace("{{ csrf_token }}", html.escape(csrf, quote=True))
         .replace("{{ asset_version }}", html.escape(_worker_version(), quote=True))
+        .replace("{{ collection_options }}", collection_options)
     )
 
 

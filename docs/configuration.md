@@ -126,3 +126,20 @@ items. It never permits arbitrary host paths. Deleting source and deleting
 compiled output are separate actions; permanent deletion is selected-item-only
 and requires a second confirmation. Asset deletion is refused while a
 processing profile still references the asset.
+
+Every catalog clip shows its full stable ID in the Library table's **Clip ID**
+column, with a **Copy ID** button per row. The **Playback order** tab arranges
+a collection's clips (including ones without a usable output — their state is
+shown, and playback skips them as before) by drag-and-drop or with the arrow
+keys on a row's drag handle. **Save order** posts the ordered IDs to the
+authenticated Home Assistant bridge and sets the collection to custom order;
+when the bridge is unavailable (external Docker or a non-Home-Assistant
+browser) Save stays disabled and **Copy IDs** exports the same one-ID-per-line
+list for the collection's **Custom clip IDs** field. **Reset to path order**
+restores the deterministic path order (relative path casefold, original path,
+then clip ID). The saved order is owned by the integration; the Worker never
+stores it.
+
+If more than one Cinema Collections config entry is loaded, the visual bridge
+requires an explicit `entry_id` and the Manager cannot choose that entry yet;
+use **Copy IDs** and paste them into the target collection's settings.

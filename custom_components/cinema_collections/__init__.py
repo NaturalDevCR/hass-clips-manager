@@ -28,6 +28,7 @@ from .const import (
 )
 from .coordinator import CinemaCollectionsCoordinator, override_for_entry, policies_for_entry
 from .history import PlaybackHistoryStore
+from .order_view import CinemaCollectionsOrderView
 from .scheduler import CompilationScheduler, ConfigEntryRunTokenStore
 from .services import async_register_services
 from .subentries import (
@@ -42,6 +43,12 @@ from .subentries import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+
+async def async_setup(hass: HomeAssistant, _config: dict[str, object]) -> bool:
+    """Register the authenticated visual playback-order bridge once."""
+    hass.http.register_view(CinemaCollectionsOrderView())
+    return True
 
 
 @dataclass(slots=True)

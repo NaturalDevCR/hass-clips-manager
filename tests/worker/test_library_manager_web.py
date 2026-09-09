@@ -243,17 +243,18 @@ def test_manager_page_renders_full_clip_row_actions(tmp_path: Path) -> None:
     assert 'id="trash-table"' in html
 
 
-def test_manager_page_renders_five_tabs_and_their_panels(tmp_path: Path) -> None:
+def test_manager_page_renders_six_tabs_and_their_panels(tmp_path: Path) -> None:
     client = TestClient(_app(tmp_path))
     _manager_session(client)
 
     html = client.get("/", headers={"X-Ingress-Path": "/api/hassio_ingress/session"}).text
 
     assert 'role="tablist"' in html
-    assert html.count(' role="tab" ') == 5
-    assert html.count(' role="tabpanel" ') == 5
+    assert html.count(' role="tab" ') == 6
+    assert html.count(' role="tabpanel" ') == 6
     for panel, tab in [
         ("panel-library", "Library"),
+        ("panel-order", "Playback order"),
         ("panel-add", "Add clips"),
         ("panel-assets", "Assets"),
         ("panel-maintenance", "Maintenance"),
@@ -288,7 +289,7 @@ def test_manager_clip_row_manage_panel_labels_targets_and_actions(tmp_path: Path
     assert 'aria-expanded="false"' in html
     assert 'class="row-panel"' in html
     assert 'class="row-panel-row"' in html
-    assert '" hidden><td colspan="7"><div class="row-panel">' in html
+    assert '" hidden><td colspan="8"><div class="row-panel">' in html
     assert 'class="panel-label">Move to trash</span>' in html
     assert 'class="panel-label">Permanently delete</span>' in html
     assert 'class="trash-target"' in html
@@ -332,7 +333,7 @@ def test_manager_clip_renders_hidden_full_width_panel_row(tmp_path: Path) -> Non
 
     table = html.split('id="clips-table"', 1)[1].split("</table>", 1)[0]
     column_count = table.count("<th>")
-    assert column_count == 7
+    assert column_count == 8
     assert html.count(f'data-clip-id="{clip_id}"') == 2
     assert 'class="row-panel-row" data-clip-id="' in html
     assert f'<td colspan="{column_count}"><div class="row-panel">' in html
@@ -365,7 +366,7 @@ def test_manager_clip_renders_escaped_source_path_attribute(tmp_path: Path) -> N
     assert '"clip".mp4' not in html
 
 
-def test_manager_page_table_headers_omit_clip_id_column(tmp_path: Path) -> None:
+def test_manager_page_table_headers_include_clip_id_column(tmp_path: Path) -> None:
     client = TestClient(_app(tmp_path))
     _seed_collection(client)
     _manager_session(client)
@@ -388,10 +389,9 @@ def test_manager_page_table_headers_omit_clip_id_column(tmp_path: Path) -> None:
 
     html = client.get("/", headers={"X-Ingress-Path": "/api/hassio_ingress/session"}).text
 
-    assert "<th>Clip ID</th>" not in html
     assert (
         "<th>Collection</th><th>Source</th><th>State</th><th>Output</th>"
-        "<th>Duration</th><th>Tags</th><th>Actions</th>" in html
+        "<th>Duration</th><th>Tags</th><th>Clip ID</th><th>Actions</th>" in html
     )
     assert "<td>films</td>" in html
     assert "feature.mp4" in html
@@ -401,6 +401,12 @@ def test_manager_page_table_headers_omit_clip_id_column(tmp_path: Path) -> None:
     assert 'title="films/33333333-3333-3333-3333-333333333333.mp4"' in html
     assert "<td>1:30</td>" in html
     assert "<td>dawn</td>" in html
+    # The full stable ID is visible in its own cell, not only in a tooltip.
+    assert '<td class="clip-id"><code>33333333-3333-3333-3333-333333333333</code>' in html
+    assert (
+        'data-action="copy-id" '
+        'aria-label="Copy clip ID 33333333-3333-3333-3333-333333333333"' in html
+    )
 
 
 def test_manager_routes_complete_exact_clip_lifecycle(tmp_path: Path) -> None:
@@ -788,3 +794,124 @@ def test_manager_chunked_upload_abort_removes_staging_and_requires_csrf(tmp_path
     assert aborted.status_code == 200
     assert list(staging.iterdir()) == []
     assert client.post(f"/manager/uploads/{upload_id}/finish", headers=headers).status_code == 404
+
+
+def test_manager_page_renders_playback_order_panel_controls(tmp_path: Path) -> None:
+    client = TestClient(_app(tmp_path))
+    _manager_session(client)
+
+    html = client.get("/", headers={"X-Ingress-Path": "/api/hassio_ingress/session"}).text
+
+    assert 'id="panel-order"' in html
+    assert 'aria-labelledby="tab-order"' in html
+    assert 'data-panel="order"' in html
+    assert "<h2>Playback order</h2>" in html
+    assert '<label for="order-collection">Collection</label>' in html
+    assert '<select id="order-collection"></select>' in html
+    assert 'id="order-list"' in html
+    assert 'aria-label="Playback order"' in html
+    assert '<button type="button" id="order-save">Save order</button>' in html
+    assert '<button type="button" id="order-copy">Copy IDs</button>' in html
+    assert '<button type="button" id="order-reset">Reset to path order</button>' in html
+    assert 'id="order-result"' in html
+    assert "Copy IDs" in html
+
+
+def test_manager_clip_rows_carry_order_editor_data_attributes(tmp_path: Path) -> None:
+    client = TestClient(_app(tmp_path))
+    _seed_collection(client)
+    _manager_session(client)
+    with client.app.state.database.connection:
+        client.app.state.database.connection.execute(
+            "INSERT INTO clips(id,collection_id,state,relative_source_path,relative_output_path,"
+            "duration_seconds,output_available,metadata,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
+            (
+                "55555555-5555-5555-5555-555555555555",
+                "films",
+                "ready",
+                "films/feature.mp4",
+                "films/55555555-5555-5555-5555-555555555555.mp4",
+                125.5,
+                1,
+                "{}",
+                "2026-01-01T00:00:00+00:00",
+            ),
+        )
+
+    html = client.get("/", headers={"X-Ingress-Path": "/api/hassio_ingress/session"}).text
+
+    assert 'data-collection="films"' in html
+    assert 'data-state="ready"' in html
+    assert 'data-duration-seconds="125.5"' in html
+    assert 'data-source-path="films/feature.mp4"' in html
+    assert 'data-sequential-rank="' in html
+
+
+def test_manager_order_editor_lists_empty_configured_collections(tmp_path: Path) -> None:
+    client = TestClient(_app(tmp_path))
+    _seed_collection(client)
+    _manager_session(client)
+
+    html = client.get("/", headers={"X-Ingress-Path": "/api/hassio_ingress/session"}).text
+
+    assert '<select id="order-collection"><option value="films">Films</option></select>' in html
+
+
+def test_manager_order_editor_uses_same_origin_absolute_bridge_url_only(tmp_path: Path) -> None:
+    # The Home Assistant bridge lives at the domain root, outside the Ingress
+    # prefix, so it is the one URL the page builds as a same-origin absolute
+    # URL. Every Worker route stays relative.
+    client = TestClient(_app(tmp_path))
+    _manager_session(client)
+
+    html = client.get("/", headers={"X-Ingress-Path": "/api/hassio_ingress/session"}).text
+
+    assert "'/api/cinema_collections/order'" in html
+    assert "window.location.origin" in html
+    assert "new URL(ORDER_BRIDGE_PATH, window.location.origin)" in html
+    assert "ordered_clip_ids" in html
+    # No absolute Worker URLs snuck in with the new UI.
+    assert "fetch('/" not in html
+    assert 'fetch("/' not in html
+    assert "fetch(`/" not in html
+    assert 'src="/' not in html
+    assert 'href="/' not in html
+
+
+def test_manager_order_editor_fallback_copy_and_keyboard_drag_support(tmp_path: Path) -> None:
+    client = TestClient(_app(tmp_path))
+    _manager_session(client)
+
+    html = client.get("/", headers={"X-Ingress-Path": "/api/hassio_ingress/session"}).text
+
+    # Clipboard API with a visible textarea fallback for non-secure contexts.
+    assert "navigator.clipboard" in html
+    assert "execCommand('copy')" in html
+    # Bridge-unavailable and save-failure guidance must point at the copy path.
+    assert "bridge is unavailable" in html
+    assert "not saved" in html
+    # HTML5 drag-and-drop plus keyboard reordering on the drag handle.
+    assert "draggable = true" in html
+    assert "order-handle" in html
+    assert "ArrowUp" in html
+    assert "ArrowDown" in html
+    assert "Multiple Cinema Collections entries" in html
+    # Deterministic reset mirrors sequential playback: path casefold, then
+    # original path, then clip ID.
+    assert "deterministicClipCompare" in html
+    assert "toLowerCase()" in html
+
+
+def test_manager_order_reset_uses_compiled_output_path_and_preserves_saved_missing_ids(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(_app(tmp_path))
+    _manager_session(client)
+
+    html = client.get("/", headers={"X-Ingress-Path": "/api/hassio_ingress/session"}).text
+
+    assert "outputPath: row.dataset.outputPath" in html
+    assert "const pathA = a.outputPath || a.sourcePath" in html
+    assert "pathA.toLowerCase()" in html
+    assert "Unavailable clip" in html
+    assert "bridge.ids.map" in html
