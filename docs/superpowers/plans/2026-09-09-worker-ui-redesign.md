@@ -130,9 +130,7 @@ def _clip_payloads(database: Any) -> list[dict[str, Any]]:
                 "tags": list(metadata.get("tags") or []),
                 "notes": str(metadata.get("notes") or ""),
                 "failed_reason": (
-                    str(failed_reason)
-                    if failed_reason and state in {"failed", "invalid"}
-                    else None
+                    str(failed_reason) if failed_reason and state in {"failed", "invalid"} else None
                 ),
             }
         )
@@ -149,29 +147,31 @@ def _collection_payloads(database: Any) -> list[dict[str, str]]:
 Inside `install_manager_routes`, next to the other read routes:
 
 ```python
-    @app.get("/manager/clips", include_in_schema=False)
-    def list_manager_clips(request: Request) -> list[dict[str, Any]]:
-        if _valid_session(request) is None:
-            raise HTTPException(status_code=401, detail="Library Manager session required")
-        return _clip_payloads(request.app.state.database)
+@app.get("/manager/clips", include_in_schema=False)
+def list_manager_clips(request: Request) -> list[dict[str, Any]]:
+    if _valid_session(request) is None:
+        raise HTTPException(status_code=401, detail="Library Manager session required")
+    return _clip_payloads(request.app.state.database)
 
-    @app.get("/manager/collections", include_in_schema=False)
-    def list_manager_collections(request: Request) -> list[dict[str, str]]:
-        if _valid_session(request) is None:
-            raise HTTPException(status_code=401, detail="Library Manager session required")
-        return _collection_payloads(request.app.state.database)
 
-    @app.get("/manager/session", include_in_schema=False)
-    def manager_session(request: Request) -> dict[str, str]:
-        record = _valid_session(request)
-        if record is None:
-            raise HTTPException(status_code=401, detail="Library Manager session required")
-        _, csrf = record
-        return {
-            "csrf": csrf,
-            "worker_version": _worker_version(),
-            "order_bridge_capability": _order_bridge_capability(settings),
-        }
+@app.get("/manager/collections", include_in_schema=False)
+def list_manager_collections(request: Request) -> list[dict[str, str]]:
+    if _valid_session(request) is None:
+        raise HTTPException(status_code=401, detail="Library Manager session required")
+    return _collection_payloads(request.app.state.database)
+
+
+@app.get("/manager/session", include_in_schema=False)
+def manager_session(request: Request) -> dict[str, str]:
+    record = _valid_session(request)
+    if record is None:
+        raise HTTPException(status_code=401, detail="Library Manager session required")
+    _, csrf = record
+    return {
+        "csrf": csrf,
+        "worker_version": _worker_version(),
+        "order_bridge_capability": _order_bridge_capability(settings),
+    }
 ```
 
 - [ ] **Step 4: Run the tests to verify they pass**
@@ -509,13 +509,17 @@ In `tests/worker/test_library_manager_web.py`, every assertion of the form
 ```python
 def test_clip_without_output_reports_no_output_targets(manager_client):
     client, _ = manager_client
-    clip = next(item for item in client.get("/manager/clips").json() if not item["output_available"])
+    clip = next(
+        item for item in client.get("/manager/clips").json() if not item["output_available"]
+    )
     assert clip["relative_output_path"] == ""
 
 
 def test_failed_clip_exposes_its_failure_reason(manager_client, failed_clip_id):
     client, _ = manager_client
-    clip = next(item for item in client.get("/manager/clips").json() if item["id"] == failed_clip_id)
+    clip = next(
+        item for item in client.get("/manager/clips").json() if item["id"] == failed_clip_id
+    )
     assert clip["state"] in {"failed", "invalid"}
     assert clip["failed_reason"]
 
@@ -544,40 +548,41 @@ In `manager_web.py`, delete `_render_clip_row`, `_render_manager`, and
 `_CLIP_TABLE_COLUMNS`, then replace the body of `manager_page`:
 
 ```python
-    ui_root = Path(__file__).with_name("static") / "ui"
+ui_root = Path(__file__).with_name("static") / "ui"
 
-    @app.get("/", include_in_schema=False, response_class=HTMLResponse)
-    def manager_page(request: Request) -> HTMLResponse:
-        if not _initial_auth_is_valid(request, settings):
-            raise HTTPException(status_code=401, detail="Library Manager authentication required")
-        shell = ui_root / "index.html"
-        if not shell.is_file():
-            raise HTTPException(
-                status_code=503,
-                detail=(
-                    "The Library Manager UI bundle is missing. Build it with "
-                    "'npm --prefix ui ci && npm --prefix ui run build'."
-                ),
-            )
-        record = _valid_session(request)
-        if record is None:
-            session, csrf = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
-            _sessions(app)[session] = (csrf, time.monotonic() + _SESSION_SECONDS)
-        else:
-            session, csrf = record
-        page = HTMLResponse(shell.read_text(encoding="utf-8"))
-        page.set_cookie(
-            _COOKIE,
-            session,
-            max_age=_SESSION_SECONDS,
-            httponly=True,
-            secure=request.url.scheme == "https",
-            samesite="strict",
-            path="/",
+
+@app.get("/", include_in_schema=False, response_class=HTMLResponse)
+def manager_page(request: Request) -> HTMLResponse:
+    if not _initial_auth_is_valid(request, settings):
+        raise HTTPException(status_code=401, detail="Library Manager authentication required")
+    shell = ui_root / "index.html"
+    if not shell.is_file():
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "The Library Manager UI bundle is missing. Build it with "
+                "'npm --prefix ui ci && npm --prefix ui run build'."
+            ),
         )
-        page.headers["X-CSRF-Token"] = csrf
-        page.headers["Cache-Control"] = "no-store"
-        return page
+    record = _valid_session(request)
+    if record is None:
+        session, csrf = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
+        _sessions(app)[session] = (csrf, time.monotonic() + _SESSION_SECONDS)
+    else:
+        session, csrf = record
+    page = HTMLResponse(shell.read_text(encoding="utf-8"))
+    page.set_cookie(
+        _COOKIE,
+        session,
+        max_age=_SESSION_SECONDS,
+        httponly=True,
+        secure=request.url.scheme == "https",
+        samesite="strict",
+        path="/",
+    )
+    page.headers["X-CSRF-Token"] = csrf
+    page.headers["Cache-Control"] = "no-store"
+    return page
 ```
 
 Delete the template and the old stylesheet:

@@ -31,5 +31,20 @@ def test_app_dockerfile_is_multi_arch_pinned_and_runs_the_ingress_worker() -> No
     assert "/data/options.json" in dockerfile
     assert "cinema_collections_worker.main" in entrypoint
     assert (APP / "DOCS.md").exists()
-    assert (APP / "src/cinema_collections_worker/templates/manager.html").exists()
-    assert (APP / "src/cinema_collections_worker/static/manager.css").exists()
+
+
+def test_app_image_builds_the_library_manager_interface() -> None:
+    # The interface is a Vue single-page application. Node belongs to a build
+    # stage only, so the published image carries the bundle and no toolchain.
+    dockerfile = (APP / "Dockerfile").read_text(encoding="utf-8")
+
+    assert "FROM node:" in dockerfile
+    assert "AS ui" in dockerfile
+    assert "npm ci" in dockerfile
+    assert "npm run build" in dockerfile
+    assert (
+        "COPY --from=ui /ui/dist "
+        "/opt/cinema-collections-worker/src/cinema_collections_worker/static/ui"
+    ) in dockerfile
+    assert (ROOT / "ui/package.json").is_file()
+    assert (ROOT / "ui/src/main.ts").is_file()

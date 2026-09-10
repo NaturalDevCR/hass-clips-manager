@@ -6,7 +6,6 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
-import html
 import json
 import secrets
 import time
@@ -34,9 +33,6 @@ _SESSION_SECONDS = 60 * 60
 _ORDER_CAPABILITY_HEADER = "X-Cinema-Collections-Order-Capability"
 _ORDER_CAPABILITY_PATH = "/api/cinema_collections/order"
 _ORDER_CAPABILITY_SECONDS = 5 * 60
-# Column count of the clip table, used by both the colspan on the expandable
-# panel row and the empty-state placeholder so neither can drift apart.
-_CLIP_TABLE_COLUMNS = 8
 
 
 class _MetadataBody(BaseModel):
@@ -117,102 +113,6 @@ def _format_duration(seconds: float) -> str:
     return f"{minutes}:{remainder:02d}"
 
 
-def _render_clip_row(row: Any, *, sequential_rank: int) -> str:
-    metadata = json.loads(row["metadata"] or "{}")
-    tags = ", ".join(metadata.get("tags") or [])
-    notes = str(metadata.get("notes") or "")
-    state = str(row["state"])
-    source_value = str(row["relative_source_path"] or "")
-    source_name = source_value.rsplit("/", 1)[-1] if source_value else ""
-    output_value = str(row["relative_output_path"] or "")
-    output_available = bool(row["output_available"])
-    if output_available and output_value:
-        # Compiled outputs are named after the clip UUID, so the filename itself
-        # tells a reader nothing and only crowds the row. Report availability and
-        # keep the exact path reachable through the cell's tooltip.
-        output_cell = (
-            f'<td class="output-ready" title="{html.escape(output_value, quote=True)}">Ready</td>'
-        )
-    else:
-        output_cell = "<td>—</td>"
-    duration_seconds = float(row["duration_seconds"] or 0)
-    duration_cell = _format_duration(duration_seconds) if duration_seconds > 0 else "—"
-    failure = ""
-    if state in {"failed", "invalid"} and metadata.get("failed_reason"):
-        failure = f'<div class="clip-failure">{html.escape(str(metadata["failed_reason"]))}</div>'
-    # An unavailable output cannot be trashed or deleted, so disable those
-    # options in both target selectors.
-    target_option = (
-        '<option value="source">Source</option><option value="output">Output</option>'
-        '<option value="both">Both</option>'
-        if output_available
-        else '<option value="source">Source</option>'
-    )
-    # Both rows carry the clip identity and the paths the panel's handlers
-    # read back off row.dataset (the source cell only exists on the data row).
-    # The data row also carries the collection, state, and duration the
-    # playback-order editor reads when it builds its catalog model.
-    return (
-        '<tr data-clip-id="{id}" data-output-path="{output}" '
-        'data-source-path="{source_path}" data-collection="{collection}" '
-        'data-state="{state}" data-duration-seconds="{duration_seconds}" '
-        'data-sequential-rank="{sequential_rank}" title="{id}">'
-        "<td>{collection}</td>"
-        '<td title="{source_path}">{source_name}{failure}</td>'
-        "<td>{state}</td>"
-        "{output_cell}"
-        "<td>{duration_cell}</td><td>{tags}</td>"
-        '<td class="clip-id"><code>{id}</code> '
-        '<button type="button" data-action="copy-id" '
-        'aria-label="Copy clip ID {id}">Copy ID</button></td>'
-        '<td class="actions">'
-        '<button data-action="recompile">Recompile</button> '
-        '<button data-action="manage-toggle" aria-expanded="false">Manage</button>'
-        "</td></tr>"
-        '<tr class="row-panel-row" data-clip-id="{id}" data-output-path="{output}" '
-        'data-source-path="{source_path}" hidden>'
-        '<td colspan="{colspan}">'
-        '<div class="row-panel">'
-        '<div class="panel-group"><span class="panel-label">Re-scan the source file</span>'
-        '<button data-action="scan">Scan</button></div>'
-        '<div class="panel-group"><span class="panel-label">Move to trash</span>'
-        '<select class="trash-target" title="Trash target">{targets}</select> '
-        '<button data-action="trash">Trash</button></div>'
-        '<div class="panel-group"><span class="panel-label">Permanently delete</span>'
-        '<select class="delete-target" title="Delete target">{targets}</select> '
-        '<button data-action="delete">Delete</button></div>'
-        '<div class="panel-group"><span class="panel-label">Edit metadata</span>'
-        '<button data-action="edit-toggle">Edit</button> '
-        '<form class="row-form edit-form" hidden>'
-        '<input name="tags" value="{tags}" placeholder="tags, comma, separated">'
-        '<textarea name="notes" placeholder="Notes">{notes}</textarea>'
-        '<button type="submit">Save</button></form></div>'
-        '<div class="panel-group"><span class="panel-label">Move the source file</span>'
-        '<button data-action="move-toggle">Move</button> '
-        '<form class="row-form move-form" hidden>'
-        '<input name="destination" value="{source}" required>'
-        '<button type="submit">Move</button></form></div>'
-        "</div></td></tr>".format(
-            id=html.escape(str(row["id"]), quote=True),
-            collection=html.escape(str(row["collection_id"]), quote=True),
-            source_path=html.escape(source_value, quote=True),
-            source_name=html.escape(source_name, quote=True),
-            failure=failure,
-            state=html.escape(state, quote=True),
-            output=html.escape(output_value, quote=True),
-            output_cell=output_cell,
-            duration_cell=duration_cell,
-            duration_seconds=f"{duration_seconds:g}",
-            sequential_rank=sequential_rank,
-            tags=html.escape(tags, quote=True),
-            notes=html.escape(notes),
-            targets=target_option,
-            source=html.escape(source_value, quote=True),
-            colspan=_CLIP_TABLE_COLUMNS,
-        )
-    )
-
-
 def _clip_payloads(database: Any) -> list[dict[str, Any]]:
     """Return every live clip, ranked the way the playback-order editor expects."""
     rows = database.connection.execute(
@@ -236,9 +136,10 @@ def _clip_payloads(database: Any) -> list[dict[str, Any]]:
         ranks.update({str(row["id"]): rank for rank, row in enumerate(ordered)})
     payloads: list[dict[str, Any]] = []
     for row in rows:
-        metadata = json.loads(row["metadata"] or "{}")
+        metadata: dict[str, Any] = json.loads(row["metadata"] or "{}")
         state = str(row["state"])
         failed_reason = metadata.get("failed_reason")
+        tags: list[Any] = metadata.get("tags") or []
         payloads.append(
             {
                 "id": str(row["id"]),
@@ -249,7 +150,7 @@ def _clip_payloads(database: Any) -> list[dict[str, Any]]:
                 "state": state,
                 "duration_seconds": float(row["duration_seconds"] or 0),
                 "sequential_rank": ranks[str(row["id"])],
-                "tags": [str(tag) for tag in (metadata.get("tags") or [])],
+                "tags": [str(tag) for tag in tags],
                 "notes": str(metadata.get("notes") or ""),
                 "failed_reason": (
                     str(failed_reason) if failed_reason and state in {"failed", "invalid"} else None
@@ -284,56 +185,6 @@ def _order_bridge_capability(settings: WorkerSettings) -> str:
     return f"{encoded_payload}.{encoded_signature}"
 
 
-def _render_manager(request: Request, csrf: str, settings: WorkerSettings) -> str:
-    database = request.app.state.database
-    rows = database.connection.execute(
-        "SELECT id, collection_id, relative_source_path, relative_output_path, state, "
-        "output_available, duration_seconds, metadata FROM clips "
-        "WHERE state <> 'deleted' ORDER BY updated_at DESC, id DESC"
-    ).fetchall()
-    collection_rows = database.connection.execute(
-        "SELECT id, name FROM collections ORDER BY name COLLATE NOCASE, id"
-    ).fetchall()
-    collection_options = "".join(
-        f'<option value="{html.escape(str(row["id"]), quote=True)}">'
-        f"{html.escape(str(row['name']))}</option>"
-        for row in collection_rows
-    )
-    by_collection: dict[str, list[Any]] = {}
-    for row in rows:
-        by_collection.setdefault(str(row["collection_id"]), []).append(row)
-    sequential_ranks: dict[str, int] = {}
-    for collection_rows_for_rank in by_collection.values():
-        ordered_rows = sorted(
-            collection_rows_for_rank,
-            key=lambda row: (
-                str(row["relative_output_path"] or "").casefold(),
-                str(row["relative_output_path"] or ""),
-                str(row["id"]),
-            ),
-        )
-        sequential_ranks.update({str(row["id"]): rank for rank, row in enumerate(ordered_rows)})
-    clip_rows = (
-        "".join(
-            _render_clip_row(row, sequential_rank=sequential_ranks[str(row["id"])]) for row in rows
-        )
-        or f'<tr><td colspan="{_CLIP_TABLE_COLUMNS}">No catalogued clips yet.</td></tr>'
-    )
-    template = (
-        Path(__file__).with_name("templates").joinpath("manager.html").read_text(encoding="utf-8")
-    )
-    return (
-        template.replace("{{ clip_rows }}", clip_rows)
-        .replace("{{ csrf_token }}", html.escape(csrf, quote=True))
-        .replace(
-            "{{ order_bridge_capability }}",
-            html.escape(_order_bridge_capability(settings), quote=True),
-        )
-        .replace("{{ asset_version }}", html.escape(_worker_version(), quote=True))
-        .replace("{{ collection_options }}", collection_options)
-    )
-
-
 def _dump(value: Any) -> Any:
     return value.model_dump(mode="json") if hasattr(value, "model_dump") else value
 
@@ -343,17 +194,28 @@ def install_manager_routes(app: FastAPI, settings: WorkerSettings) -> None:
 
     app.state.manager_sessions = {}
 
+    ui_shell = Path(__file__).with_name("static") / "ui" / "index.html"
+
     @app.get("/", include_in_schema=False, response_class=HTMLResponse)
     def manager_page(request: Request) -> HTMLResponse:
         if not _initial_auth_is_valid(request, settings):
             raise HTTPException(status_code=401, detail="Library Manager authentication required")
+        if not ui_shell.is_file():
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "The Library Manager interface has not been built. Run "
+                    "'npm --prefix ui ci && npm --prefix ui run build' and copy ui/dist to "
+                    "the Worker's static/ui directory."
+                ),
+            )
         record = _valid_session(request)
         if record is None:
             session, csrf = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
             _sessions(app)[session] = (csrf, time.monotonic() + _SESSION_SECONDS)
         else:
             session, csrf = record
-        page = HTMLResponse(_render_manager(request, csrf, settings))
+        page = HTMLResponse(ui_shell.read_text(encoding="utf-8"))
         page.set_cookie(
             _COOKIE,
             session,

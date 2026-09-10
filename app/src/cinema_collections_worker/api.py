@@ -586,11 +586,17 @@ def create_app(settings: WorkerSettings) -> FastAPI:
         catalog=app.state.catalog,
         library_manager=app.state.library_manager,
     )
-    app.mount(
-        "/static",
-        StaticFiles(directory=Path(__file__).with_name("static")),
-        name="library-manager-static",
-    )
+    # The single-page shell is served from the Ingress root, so its relative
+    # asset URLs resolve to /assets/*. Mount the built bundle's asset directory
+    # there when a build is present; a source checkout has none, and the shell
+    # route reports the missing bundle instead.
+    ui_assets = Path(__file__).with_name("static") / "ui" / "assets"
+    if ui_assets.is_dir():
+        app.mount(
+            "/assets",
+            StaticFiles(directory=ui_assets),
+            name="library-manager-ui-assets",
+        )
     install_manager_routes(app, settings)
 
     @app.middleware("http")
