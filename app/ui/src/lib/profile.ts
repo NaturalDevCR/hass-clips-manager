@@ -12,14 +12,20 @@ export function withQualityMode(quality: QualityMode, mode: QualityMode["mode"])
   return { mode: "bitrate", bitrate_kbps: quality.bitrate_kbps ?? 8000, crf: quality.crf ?? null };
 }
 
+/**
+ * Scaling discriminates on `strategy`, not `mode` like the other settings do.
+ * Sending `mode` here is rejected by the Worker, which forbids unknown fields.
+ */
 export function withScalingMode(
   scaling: ScalingStrategy,
-  mode: ScalingStrategy["mode"],
+  strategy: ScalingStrategy["strategy"],
 ): ScalingStrategy {
-  if (scaling.mode === mode) return scaling;
-  if (mode === "crop") return { mode: "crop", width: scaling.width, height: scaling.height };
+  if (scaling.strategy === strategy) return scaling;
+  if (strategy === "crop") {
+    return { strategy: "crop", width: scaling.width, height: scaling.height };
+  }
   return {
-    mode: "aspect_fit",
+    strategy: "aspect_fit",
     width: scaling.width,
     height: scaling.height,
     sar_num: 1,

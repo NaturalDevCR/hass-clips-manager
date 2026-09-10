@@ -140,7 +140,7 @@ async function save(): Promise<void> {
           <span class="text-xs text-muted">Scaling</span>
           <select
             class="field w-40"
-            :value="settings.video.scaling.mode"
+            :value="settings.video.scaling.strategy"
             @change="
               settings.video.scaling = withScalingMode(
                 settings.video.scaling,

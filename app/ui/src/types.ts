@@ -88,7 +88,7 @@ export interface BitrateQuality {
 export type QualityMode = CrfQuality | BitrateQuality;
 
 export interface AspectFitScaling {
-  mode: "aspect_fit";
+  strategy: "aspect_fit";
   width: number;
   height: number;
   sar_num: number;
@@ -96,7 +96,7 @@ export interface AspectFitScaling {
 }
 
 export interface CropScaling {
-  mode: "crop";
+  strategy: "crop";
   width: number;
   height: number;
 }

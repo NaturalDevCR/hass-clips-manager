@@ -18,15 +18,24 @@ describe("withQualityMode", () => {
 });
 
 describe("withScalingMode", () => {
-  it("carries the frame size across the switch", () => {
+  it("discriminates on strategy, the field the Worker actually stores", () => {
     const fit: ScalingStrategy = {
-      mode: "aspect_fit",
+      strategy: "aspect_fit",
       width: 1920,
       height: 1080,
       sar_num: 1,
       sar_den: 1,
     };
-    expect(withScalingMode(fit, "crop")).toEqual({ mode: "crop", width: 1920, height: 1080 });
+
+    const cropped = withScalingMode(fit, "crop");
+
+    expect(cropped).toEqual({ strategy: "crop", width: 1920, height: 1080 });
+    expect("mode" in cropped).toBe(false);
+  });
+
+  it("returns the same object when the strategy already matches", () => {
+    const crop: ScalingStrategy = { strategy: "crop", width: 1920, height: 1080 };
+    expect(withScalingMode(crop, "crop")).toBe(crop);
   });
 });
 

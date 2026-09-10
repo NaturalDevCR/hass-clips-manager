@@ -85,20 +85,36 @@ def _matches(pushed: Mapping[str, Any], stored: Mapping[str, Any]) -> list[str]:
     return differences
 
 
+# The create contract has a deliberately small surface. Everything else is set
+# through the revision API, so a create is always followed by a patch.
+_CREATE_FIELDS = (
+    "name",
+    "source_directory",
+    "processing_profile_id",
+    "enabled",
+    "is_default",
+    "starts_at",
+    "ends_at",
+    "schedule",
+    "playback_mode",
+    "ordered_clip_ids",
+)
+
+
 async def _push_collection(
     client: WorkerApiClient, collection_id: str, payload: Mapping[str, Any]
 ) -> None:
-    """Create the collection, or patch it when the Worker already knows it."""
-    try:
+    """Create the collection when the Worker does not know it, then patch it."""
+    records = {record.id: record for record in await client.async_list_collections()}
+    if collection_id not in records:
         await client.async_create_collection(
-            {"id": collection_id, **payload},
+            {
+                "id": collection_id,
+                **{field: payload[field] for field in _CREATE_FIELDS},
+            },
             idempotency_key=f"migrate:collection:{collection_id}:create",
         )
-        return
-    except WorkerApiError:
-        # Already present: bring it up to date at its current revision instead.
-        pass
-    records = {record.id: record for record in await client.async_list_collections()}
+        records = {record.id: record for record in await client.async_list_collections()}
     existing = records.get(collection_id)
     if existing is None:
         raise WorkerApiError(f"the Worker did not accept collection {collection_id}")
@@ -218,18 +234,14 @@ async def async_migrate_subentries(
 async def _push_profile(
     client: WorkerApiClient, profile_id: str, name: str, settings: Mapping[str, Any]
 ) -> None:
-    payload = {"id": profile_id, "name": name, "settings": dict(settings)}
-    try:
+    records = await client.async_list_profile_records()
+    if profile_id not in records:
         await client.async_create_profile(
-            payload, idempotency_key=f"migrate:profile:{profile_id}:create"
+            {"id": profile_id, "name": name, "settings": dict(settings)},
+            idempotency_key=f"migrate:profile:{profile_id}:create",
         )
         return
-    except WorkerApiError:
-        pass
-    records = await client.async_list_profile_records()
-    stored = records.get(profile_id)
-    if stored is None:
-        raise WorkerApiError(f"the Worker did not accept profile {profile_id}")
+    stored = records[profile_id]
     revision = stored.get("revision")
     if isinstance(revision, bool) or not isinstance(revision, int):
         raise WorkerApiError(f"the Worker reported no revision for profile {profile_id}")

@@ -76,12 +76,20 @@ class _FakeClient:
         self.stored = stored if stored is not None else _stored_collection()
         self.settings = _SETTINGS if settings is None else settings
         self.fail = fail
+        self.known: set[str] = set()
+        self.known_profiles: set[str] = set()
         self.calls: list[str] = []
 
     async def async_create_collection(self, payload: Any, *, idempotency_key: str) -> Any:
         if self.fail:
             raise WorkerApiError("the Worker is unreachable")
+        # The Worker forbids unknown fields on create; these four are only
+        # settable through the revision API.
+        forbidden = {"priority", "allow_manual_override", "tags", "notes"} & set(payload)
+        if forbidden:
+            raise WorkerApiError(f"unexpected create fields: {sorted(forbidden)}")
         self.calls.append("create_collection")
+        self.known.add(str(payload["id"]))
         return {"revision": 1}
 
     async def async_patch_collection(
@@ -94,6 +102,7 @@ class _FakeClient:
         if self.fail:
             raise WorkerApiError("the Worker is unreachable")
         self.calls.append("create_profile")
+        self.known_profiles.add(str(payload["id"]))
         return {"revision": 1}
 
     async def async_patch_profile(
@@ -105,7 +114,7 @@ class _FakeClient:
     async def async_list_collections(self) -> tuple[WorkerCollection, ...]:
         if self.fail:
             raise WorkerApiError("the Worker is unreachable")
-        return (self.stored,)
+        return (self.stored,) if self.stored.id in self.known else ()
 
     async def async_list_profile_records(self) -> dict[str, Any]:
         if self.fail:
@@ -232,3 +241,70 @@ def test_setup_refuses_a_worker_that_cannot_own_the_configuration() -> None:
 
     current = SimpleNamespace(data=SimpleNamespace(health=SimpleNamespace(worker_version="1.8.0")))
     _require_supported_worker(current)  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_migration_carries_a_real_entry_shape_unchanged(hass: HomeAssistant) -> None:
+    """The subentry shape a live installation actually stores.
+
+    `worker_revision` is the integration's own bookkeeping and is not sent; the
+    schedule mapping travels whole, including the fields the dispatcher reads.
+    """
+    schedule = {
+        "enabled": False,
+        "local_time": "00:00",
+        "skip_if_processing": True,
+        "strategy": "scan_and_compile_changed_or_missing",
+        "weekdays": [],
+    }
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={"host": "worker.local"},
+        subentries_data=[
+            ConfigSubentryData(
+                data={
+                    "collection_id": "regular",
+                    "name": "Regular",
+                    "source_directory": "regular",
+                    "processing_profile_id": "cinema",
+                    "enabled": True,
+                    "priority": 0,
+                    "starts_at": None,
+                    "ends_at": None,
+                    "is_default": True,
+                    "allow_manual_override": True,
+                    "tags": [],
+                    "notes": None,
+                    "schedule": schedule,
+                    "worker_revision": 31,
+                    "playback_mode": "random",
+                    "ordered_clip_ids": [],
+                },
+                subentry_type=SUBENTRY_COLLECTION,
+                title="Regular",
+                unique_id="regular",
+            ),
+        ],
+    )
+    entry.add_to_hass(hass)
+    client = _FakeClient(
+        stored=_stored_collection(
+            id="regular",
+            name="Regular",
+            source_directory="regular",
+            priority=0,
+            is_default=True,
+            allow_manual_override=True,
+            tags=[],
+            notes=None,
+            starts_at=None,
+            schedule=schedule,
+            playback_mode="random",
+            ordered_clip_ids=[],
+        )
+    )
+
+    migrated = await async_migrate_subentries(hass, entry, client)  # type: ignore[arg-type]
+
+    assert migrated is True
+    assert entry.subentries == {}
