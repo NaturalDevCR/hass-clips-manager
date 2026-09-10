@@ -20,7 +20,7 @@ const sections = [
       :key="section.name"
       :to="{ name: section.name }"
       class="flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-muted transition hover:bg-hover hover:text-ink max-md:flex-col max-md:gap-1 max-md:text-xs"
-      active-class="bg-raised text-accent"
+      active-class="bg-raised text-accent!"
     >
       <span aria-hidden="true" class="text-base">{{ section.glyph }}</span>
       <span>{{ section.label }}</span>

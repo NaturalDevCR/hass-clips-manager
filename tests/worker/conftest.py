@@ -23,14 +23,18 @@ _STUB_SHELL = (
 def manager_ui_shell() -> Iterator[Path]:
     root = Path(manager_web.__file__).parent / "static" / "ui"
     shell = root / "index.html"
-    if shell.is_file():
-        yield shell
-        return
-    root.mkdir(parents=True, exist_ok=True)
-    shell.write_text(_STUB_SHELL, encoding="utf-8")
+    # A test may delete the shell to exercise the unbuilt-interface path, so a
+    # real local build is restored afterwards rather than left destroyed.
+    original = shell.read_bytes() if shell.is_file() else None
+    if original is None:
+        root.mkdir(parents=True, exist_ok=True)
+        shell.write_text(_STUB_SHELL, encoding="utf-8")
     try:
         yield shell
     finally:
-        shell.unlink(missing_ok=True)
-        if root.is_dir() and not any(root.iterdir()):
-            root.rmdir()
+        if original is None:
+            shell.unlink(missing_ok=True)
+            if root.is_dir() and not any(root.iterdir()):
+                root.rmdir()
+        elif not shell.is_file():
+            shell.write_bytes(original)
