@@ -7,9 +7,11 @@ It has two components:
 
 - **Cinema Collections Worker** — a Supervisor App that catalogs source clips,
   compiles them into intro/outro-ready clips with an FFmpeg queue, and exposes a
-  Library Manager through App Ingress. The Library Manager imports and scans
-  clips, uploads intro/outro assets, recompiles or recovers catalog items, and
-  shows live job progress.
+  Library Manager through App Ingress. The Library Manager is a single-page
+  interface with four sections: Library, which searches, filters, and acts on
+  the catalog one clip or many at a time; Playback order; Import, for clip
+  uploads, disk scans, and intro/outro assets; and System, for folders, trash,
+  jobs, and the worker log.
 - **Cinema Collections integration** — a HACS integration that pairs with the
   Worker, stores collection policy and typed processing profiles (edited through
   a field-by-field form, not JSON), and exposes monitoring sensors, buttons, a
