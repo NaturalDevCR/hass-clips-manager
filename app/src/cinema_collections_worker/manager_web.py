@@ -3,8 +3,6 @@
 
 from __future__ import annotations
 
-import base64
-import hashlib
 import hmac
 import json
 import secrets
@@ -30,9 +28,6 @@ def _worker_version() -> str:
 
 _COOKIE = "cinema_collections_manager"
 _SESSION_SECONDS = 60 * 60
-_ORDER_CAPABILITY_HEADER = "X-Cinema-Collections-Order-Capability"
-_ORDER_CAPABILITY_PATH = "/api/cinema_collections/order"
-_ORDER_CAPABILITY_SECONDS = 5 * 60
 
 
 class _MetadataBody(BaseModel):
@@ -192,24 +187,6 @@ def _collection_payloads(database: Any) -> list[dict[str, str]]:
     return [{"id": str(row["id"]), "name": str(row["name"])} for row in rows]
 
 
-def _order_bridge_capability(settings: WorkerSettings) -> str:
-    """Create a short-lived capability for the HA order bridge.
-
-    The browser must not receive the long-lived Worker bearer secret. The
-    integration validates this scoped capability against the same secret it
-    already stores for Worker API calls.
-    """
-    expires = int(time.time()) + _ORDER_CAPABILITY_SECONDS
-    nonce = secrets.token_urlsafe(18)
-    payload = f"{_ORDER_CAPABILITY_PATH}|{expires}|{nonce}".encode()
-    signature = hmac.new(
-        settings.bearer_secret.get_secret_value().encode(), payload, hashlib.sha256
-    ).digest()
-    encoded_payload = base64.urlsafe_b64encode(payload).decode().rstrip("=")
-    encoded_signature = base64.urlsafe_b64encode(signature).decode().rstrip("=")
-    return f"{encoded_payload}.{encoded_signature}"
-
-
 def _dump(value: Any) -> Any:
     return value.model_dump(mode="json") if hasattr(value, "model_dump") else value
 
@@ -272,11 +249,7 @@ def install_manager_routes(app: FastAPI, settings: WorkerSettings) -> None:
         if record is None:
             raise HTTPException(status_code=401, detail="Library Manager session required")
         _, csrf = record
-        return {
-            "csrf": csrf,
-            "worker_version": _worker_version(),
-            "order_bridge_capability": _order_bridge_capability(settings),
-        }
+        return {"csrf": csrf, "worker_version": _worker_version()}
 
     @app.get("/manager/jobs/{job_id}", include_in_schema=False)
     def job_status(request: Request, job_id: str) -> Any:

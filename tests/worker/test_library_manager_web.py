@@ -614,7 +614,7 @@ def test_manager_clips_route_requires_a_session(tmp_path: Path) -> None:
     assert client.get("/manager/session").status_code == 401
 
 
-def test_manager_session_route_mints_a_fresh_order_capability(tmp_path: Path) -> None:
+def test_manager_session_route_reports_the_csrf_token_and_version(tmp_path: Path) -> None:
     client = TestClient(_app(tmp_path))
     csrf = _manager_session(client)
 
@@ -622,7 +622,6 @@ def test_manager_session_route_mints_a_fresh_order_capability(tmp_path: Path) ->
 
     assert payload["csrf"] == csrf
     assert payload["worker_version"]
-    assert "." in payload["order_bridge_capability"]
 
 
 def test_manager_collections_route_lists_configured_collections(tmp_path: Path) -> None:
@@ -717,3 +716,14 @@ def test_manager_jobs_report_a_library_wide_scan_with_no_target(tmp_path: Path) 
     scan_job = next(job for job in client.get("/manager/jobs").json() if job["kind"] == "scan")
 
     assert scan_job["target"] == ""
+
+
+def test_manager_session_no_longer_mints_an_order_capability(tmp_path: Path) -> None:
+    # Playback order is the Worker's own data now, so saving it is an ordinary
+    # authenticated write and needs no capability for a Home Assistant bridge.
+    client = TestClient(_app(tmp_path))
+    _manager_session(client)
+
+    payload = client.get("/manager/session").json()
+
+    assert set(payload) == {"csrf", "worker_version"}
