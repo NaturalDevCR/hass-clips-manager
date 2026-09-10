@@ -160,6 +160,31 @@ def _clip_payloads(database: Any) -> list[dict[str, Any]]:
     return payloads
 
 
+def _job_target(kind: str, payload_json: Any) -> str:
+    """Name what a job acts on, so a queue of jobs is not a list of identical rows.
+
+    A compile job reports the clip's source path. A scan job reports the
+    collections it was scoped to, or an empty string when it covers the whole
+    library. The Worker owns these shapes — a scan's ``clip_id`` is synthetic and
+    its ``collection_id`` is the literal "system" — so they are resolved here
+    rather than leaked to the interface.
+    """
+    try:
+        payload: dict[str, Any] = json.loads(payload_json or "{}")
+    except ValueError:
+        return ""
+    if kind == "compile":
+        return str(payload.get("source_relative_path") or "")
+    if kind == "scan":
+        settings: dict[str, Any] = payload.get("profile_settings") or {}
+        raw: object = settings.get("collection_ids")
+        if not isinstance(raw, list):
+            return ""
+        entries: list[object] = list(raw)  # pyright: ignore[reportUnknownArgumentType]
+        return ", ".join(sorted({value for value in entries if isinstance(value, str)}))
+    return ""
+
+
 def _collection_payloads(database: Any) -> list[dict[str, str]]:
     rows = database.connection.execute(
         "SELECT id, name FROM collections ORDER BY name COLLATE NOCASE, id"
@@ -382,7 +407,7 @@ def install_manager_routes(app: FastAPI, settings: WorkerSettings) -> None:
         if not _initial_auth_is_valid(request, settings):
             raise HTTPException(status_code=401, detail="Library Manager authentication required")
         rows = request.app.state.database.connection.execute(
-            "SELECT id,kind,state,created_at,finished_at,error FROM jobs "
+            "SELECT id,kind,state,created_at,finished_at,error,clip_id,payload FROM jobs "
             "ORDER BY created_at DESC, id DESC LIMIT 50"
         ).fetchall()
         return [
@@ -393,6 +418,8 @@ def install_manager_routes(app: FastAPI, settings: WorkerSettings) -> None:
                 "created_at": row["created_at"],
                 "finished_at": row["finished_at"],
                 "error": row["error"],
+                "clip_id": str(row["clip_id"]) if str(row["kind"]) == "compile" else None,
+                "target": _job_target(str(row["kind"]), row["payload"]),
             }
             for row in rows
         ]
