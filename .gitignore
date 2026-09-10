@@ -13,4 +13,6 @@ build/
 .DS_Store
 .env
 *.log
-
+ui/node_modules/
+ui/dist/
+app/src/cinema_collections_worker/static/ui/
