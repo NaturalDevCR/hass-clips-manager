@@ -109,7 +109,7 @@ async def test_operational_actions_dispatch_only_published_worker_requests(
             client=client, history=None, coordinator=Coordinator(), entry=entry
         )
     }
-    monkeypatch.setattr(services, "policies_for_entry", lambda _entry: (CollectionPolicy("films"),))
+    monkeypatch.setattr(services, "_policies", lambda _coordinator: (CollectionPolicy("films"),))
 
     await services.async_run_action(hass, entry, services.SERVICE_SCAN_LIBRARY, {})
     # This fixture reports a job already running, and compile_all now declines
@@ -164,7 +164,7 @@ async def test_cancel_processing_still_cancels_only_one_job(hass, monkeypatch) -
             client=client, history=None, coordinator=Coordinator(), entry=entry
         )
     }
-    monkeypatch.setattr(services, "policies_for_entry", lambda _entry: (CollectionPolicy("films"),))
+    monkeypatch.setattr(services, "_policies", lambda _coordinator: (CollectionPolicy("films"),))
 
     await services.async_run_action(hass, entry, services.SERVICE_CANCEL_PROCESSING, {})
 
@@ -204,7 +204,7 @@ async def test_explicit_override_rejects_collections_not_available_to_the_select
 
     entry = SimpleNamespace(entry_id="override-entry", options={})
     hass = SimpleNamespace(config_entries=ConfigEntries(), data={DOMAIN: {}})
-    monkeypatch.setattr(services, "policies_for_entry", lambda _entry: (collection,))
+    monkeypatch.setattr(services, "_policies", lambda _coordinator: (collection,))
 
     if raises is not None:
         with pytest.raises(HomeAssistantError, match=raises):
@@ -336,8 +336,8 @@ async def test_compile_all_queues_every_enabled_collection(hass, monkeypatch) ->
     }
     monkeypatch.setattr(
         services,
-        "policies_for_entry",
-        lambda _entry: (CollectionPolicy("regular"), CollectionPolicy("halloween")),
+        "_policies",
+        lambda _coordinator: (CollectionPolicy("regular"), CollectionPolicy("halloween")),
     )
 
     await services.async_run_action(hass, entry, services.SERVICE_COMPILE_ALL, {})
@@ -374,8 +374,8 @@ async def test_compile_all_declines_when_the_worker_was_already_busy(hass, monke
     }
     monkeypatch.setattr(
         services,
-        "policies_for_entry",
-        lambda _entry: (CollectionPolicy("regular"), CollectionPolicy("halloween")),
+        "_policies",
+        lambda _coordinator: (CollectionPolicy("regular"), CollectionPolicy("halloween")),
     )
 
     await services.async_run_action(hass, entry, services.SERVICE_COMPILE_ALL, {})

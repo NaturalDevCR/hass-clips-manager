@@ -204,3 +204,62 @@ class WorkerStatus:
             scans=MappingProxyType(dict(scans)),
             latest_errors=errors,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class WorkerCollection:
+    """A Worker collection and the policy the integration selects and schedules on."""
+
+    id: str
+    name: str
+    enabled: bool
+    priority: int
+    is_default: bool
+    allow_manual_override: bool
+    starts_at: str | None
+    ends_at: str | None
+    schedule: Mapping[str, Any]
+    playback_mode: str
+    ordered_clip_ids: tuple[str, ...]
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> WorkerCollection:
+        """Parse the collection policy the Worker now owns."""
+        for name in ("enabled", "is_default", "allow_manual_override"):
+            if not isinstance(payload.get(name), bool):
+                raise WorkerContractError(f"Worker response field {name!r} must be boolean")
+        priority = payload.get("priority")
+        if isinstance(priority, bool) or not isinstance(priority, int):
+            raise WorkerContractError("Worker response field 'priority' must be an integer")
+        for name in ("starts_at", "ends_at"):
+            value = payload.get(name)
+            if value is not None and not isinstance(value, str):
+                raise WorkerContractError(
+                    f"Worker response field {name!r} must be a string or null"
+                )
+        raw_order = payload.get("ordered_clip_ids", [])
+        if not isinstance(raw_order, list):
+            raise WorkerContractError("Worker response field 'ordered_clip_ids' must be an array")
+        order = cast(list[object], raw_order)
+        if not all(isinstance(entry, str) and entry for entry in order):
+            raise WorkerContractError(
+                "Worker response field 'ordered_clip_ids' must hold non-empty strings"
+            )
+        playback_mode = payload.get("playback_mode", "random")
+        if not isinstance(playback_mode, str):
+            raise WorkerContractError("Worker response field 'playback_mode' must be a string")
+        return cls(
+            id=_required_string(payload, "id"),
+            name=_required_string(payload, "name"),
+            enabled=bool(payload["enabled"]),
+            priority=priority,
+            is_default=bool(payload["is_default"]),
+            allow_manual_override=bool(payload["allow_manual_override"]),
+            starts_at=cast(str | None, payload.get("starts_at")),
+            ends_at=cast(str | None, payload.get("ends_at")),
+            schedule=MappingProxyType(
+                dict(_required_mapping(payload.get("schedule", {}), "schedule"))
+            ),
+            playback_mode=playback_mode,
+            ordered_clip_ids=tuple(cast(list[str], order)),
+        )

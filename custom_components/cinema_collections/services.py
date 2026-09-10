@@ -21,7 +21,7 @@ from .const import (
     DOMAIN,
     PlaybackMode,
 )
-from .coordinator import CinemaCollectionsCoordinator, override_for_entry, policies_for_entry
+from .coordinator import CinemaCollectionsCoordinator, override_for_entry
 from .history import PlaybackHistoryStore
 from .resolver import CollectionPolicy, OverrideKind, OverrideMode, resolve_active_collection
 from .selection import ClipAvailabilityClient, SelectionService, SelectRequest, build_media_uri
@@ -264,7 +264,7 @@ async def async_run_action(
 ) -> ServiceResponse:
     """Run a service or button action through one validated, non-device-control path."""
     runtime = _runtime(hass, entry)
-    collections = policies_for_entry(entry)
+    collections = _policies(runtime.coordinator)
     if action == SERVICE_SELECT_NEXT_CLIP:
         if runtime.history is None:
             raise HomeAssistantError("Cinema Collections playback history is not ready")
@@ -379,6 +379,13 @@ async def async_run_action(
     return None
 
 
+def _policies(
+    coordinator: CinemaCollectionsCoordinator | None,
+) -> tuple[CollectionPolicy, ...]:
+    """Collection policy as last read from the Worker, which owns it."""
+    return () if coordinator is None else coordinator.current_policies()
+
+
 async def async_set_collection_override(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -394,7 +401,7 @@ async def async_set_collection_override(
         elif option == OverrideKind.DEFAULT.value:
             mode, collection_id = OverrideKind.DEFAULT, None
         else:
-            _override_collection_or_error(policies_for_entry(entry), option)
+            _override_collection_or_error(_policies(coordinator), option)
             mode, collection_id = OverrideKind.EXPLICIT, option
     else:
         try:
@@ -405,7 +412,7 @@ async def async_set_collection_override(
             ) from error
         collection_id = data.get("collection_id")
         if mode is OverrideKind.EXPLICIT:
-            _override_collection_or_error(policies_for_entry(entry), collection_id)
+            _override_collection_or_error(_policies(coordinator), collection_id)
         elif collection_id is not None:
             raise HomeAssistantError("collection_id is allowed only for an explicit override")
 

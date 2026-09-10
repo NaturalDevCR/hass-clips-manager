@@ -26,7 +26,7 @@ from .const import (
     PLATFORMS,
     HistoryResetMode,
 )
-from .coordinator import CinemaCollectionsCoordinator, override_for_entry, policies_for_entry
+from .coordinator import CinemaCollectionsCoordinator, override_for_entry
 from .history import PlaybackHistoryStore
 from .order_view import CinemaCollectionsOrderView
 from .scheduler import CompilationScheduler, ConfigEntryRunTokenStore
@@ -120,13 +120,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass,
         client,
         entry=entry if hasattr(entry, "async_on_unload") else None,
-        collections=lambda: policies_for_entry(entry),
         override=lambda: override_for_entry(entry),
-        schedules=lambda: tuple(
-            schedule
-            for collection in collection_subentries(entry)
-            for schedule in collection.schedules()
-        ),
         history=lambda: history,
     )
     # Worker disconnects become a degraded snapshot, so setup remains available

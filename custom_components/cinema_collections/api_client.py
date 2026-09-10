@@ -12,6 +12,7 @@ from aiohttp import ClientError, ClientSession, ClientTimeout
 from .const import API_PREFIX, DEFAULT_REQUEST_TIMEOUT, MAX_REQUEST_ATTEMPTS, RETRY_BACKOFF_SECONDS
 from .models import (
     WorkerClip,
+    WorkerCollection,
     WorkerContractError,
     WorkerHealth,
     WorkerJob,
@@ -140,6 +141,41 @@ class WorkerApiClient:
             if not items:
                 raise WorkerApiProtocolError(
                     "Worker clips response ended before its declared total"
+                )
+            page += 1
+
+    async def async_list_collections(self) -> tuple[WorkerCollection, ...]:
+        """Return every Worker collection with the policy the Worker now owns."""
+        page = 1
+        collections: list[WorkerCollection] = []
+        while True:
+            payload = await self._async_get(f"/collections?page={page}&page_size=100")
+            try:
+                total = payload.get("total")
+                raw_items = payload.get("items")
+                if isinstance(total, bool) or not isinstance(total, int) or total < 0:
+                    raise WorkerContractError(
+                        "Worker collections response field 'total' must be an integer"
+                    )
+                if not isinstance(raw_items, list):
+                    raise WorkerContractError(
+                        "Worker collections response field 'items' must be an array"
+                    )
+                items = cast(list[object], raw_items)
+                if not all(isinstance(item, Mapping) for item in items):
+                    raise WorkerContractError("Worker collections response items must be objects")
+                collections.extend(
+                    WorkerCollection.from_dict(cast(Mapping[str, Any], item)) for item in items
+                )
+            except WorkerContractError as error:
+                raise WorkerApiProtocolError(
+                    "Worker collections response did not match the API contract"
+                ) from error
+            if len(collections) >= total:
+                return tuple(collections[:total])
+            if not items:
+                raise WorkerApiProtocolError(
+                    "Worker collections response ended before its declared total"
                 )
             page += 1
 
