@@ -31,22 +31,24 @@ integration lives at `custom_components/cinema_collections`.
 
 ## The Library Manager interface
 
-The Library Manager is a Vue 3 single-page application under `ui/`, built with
+The Library Manager is a Vue 3 single-page application under `app/ui/`, built with
 Vite and Tailwind. Install its dependencies and run its own checks with:
 
 ```console
-npm --prefix ui install
-npm --prefix ui run test:unit
-npm --prefix ui run build
+npm --prefix app/ui install
+npm --prefix app/ui run test:unit
+npm --prefix app/ui run build
 ```
 
-`npm --prefix ui run dev` serves the interface with hot reload and proxies
+`npm --prefix app/ui run dev` serves the interface with hot reload and proxies
 `/manager` to a Worker on port 8099, so run the Worker alongside it.
 
-The build writes `ui/dist`, which is never committed: the App image builds it in
-a Node stage and copies it to the Worker's `static/ui` directory. A Worker
+The build writes `app/ui/dist`, which is never committed: the App image builds it
+in a Node stage and copies it to the Worker's `static/ui` directory. The interface
+lives inside `app/` because the Supervisor builds a local add-on with the add-on
+folder as the Docker build context, so nothing the image needs may sit outside it. A Worker
 started without that bundle answers `GET /` with 503 naming the build command,
-so copy `ui/dist` there when running the Worker directly from a checkout.
+so copy `app/ui/dist` there when running the Worker directly from a checkout.
 
 Two constraints hold for anything the interface fetches. Home Assistant serves
 the App under a per-install Ingress prefix, so every Worker URL must be

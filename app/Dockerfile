@@ -2,6 +2,8 @@ ARG BUILD_ARCH=amd64
 
 # The Library Manager is a Vue single-page application. Node lives only in this
 # stage, so the published image carries the built bundle and no toolchain.
+# Every COPY source stays inside this folder: the Supervisor builds a local
+# add-on with the add-on folder as the Docker build context.
 FROM node:22-alpine AS ui
 WORKDIR /ui
 COPY ui/package.json ui/package-lock.json ./
@@ -15,9 +17,9 @@ RUN apk add --no-cache ffmpeg python3 py3-pip \
     && python3 -m pip install --no-cache-dir --break-system-packages \
         "fastapi==0.115.14" "uvicorn[standard]==0.32.1" "PyYAML==6.0.2" "pydantic==2.11.7"
 
-COPY app/src /opt/cinema-collections-worker/src
+COPY src /opt/cinema-collections-worker/src
 COPY --from=ui /ui/dist /opt/cinema-collections-worker/src/cinema_collections_worker/static/ui
-COPY app/rootfs /
+COPY rootfs /
 
 ENV PYTHONPATH=/opt/cinema-collections-worker/src
 ENV CINEMA_COLLECTIONS_OPTIONS=/data/options.json
