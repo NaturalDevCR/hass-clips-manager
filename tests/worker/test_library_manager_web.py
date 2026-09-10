@@ -567,7 +567,10 @@ def test_manager_collections_include_collections_without_clips(tmp_path: Path) -
     _seed_collection(client)
     _manager_session(client)
 
-    assert client.get("/manager/collections").json() == [{"id": "films", "name": "Films"}]
+    listed = client.get("/manager/collections").json()
+
+    assert [entry["id"] for entry in listed] == ["films"]
+    assert listed[0]["name"] == "Films"
 
 
 def _seed_catalogued_clip(client: TestClient, name: str = "clip.mp4") -> str:
@@ -629,7 +632,10 @@ def test_manager_collections_route_lists_configured_collections(tmp_path: Path) 
     _seed_collection(client)
     _manager_session(client)
 
-    assert client.get("/manager/collections").json() == [{"id": "films", "name": "Films"}]
+    listed = client.get("/manager/collections").json()
+
+    assert [entry["id"] for entry in listed] == ["films"]
+    assert listed[0]["name"] == "Films"
 
 
 def test_manager_page_serves_the_single_page_shell(tmp_path: Path) -> None:
@@ -727,3 +733,103 @@ def test_manager_session_no_longer_mints_an_order_capability(tmp_path: Path) -> 
     payload = client.get("/manager/session").json()
 
     assert set(payload) == {"csrf", "worker_version"}
+
+
+def test_manager_collections_route_returns_full_records(tmp_path: Path) -> None:
+    client = TestClient(_app(tmp_path))
+    _seed_collection(client)
+    _manager_session(client)
+
+    record = client.get("/manager/collections").json()[0]
+
+    assert record["id"] == "films"
+    assert record["playback_mode"] == "random"
+    assert record["revision"] == 1
+    assert record["processing_profile_id"] == "compatibility-4k-loudness"
+
+
+def test_manager_creates_and_patches_a_collection(tmp_path: Path) -> None:
+    client = TestClient(_app(tmp_path))
+    csrf = _manager_session(client)
+    headers = {"X-CSRF-Token": csrf, "Content-Type": "application/json"}
+
+    created = client.post(
+        "/manager/collections",
+        headers=headers,
+        json={
+            "id": "shorts",
+            "name": "Shorts",
+            "source_directory": "shorts",
+            "processing_profile_id": "compatibility-4k-loudness",
+        },
+    )
+    assert created.status_code == 201
+
+    patched = client.post(
+        "/manager/collections/shorts",
+        headers={**headers, "If-Match-Revision": "1"},
+        json={"priority": 5, "playback_mode": "sequential"},
+    )
+
+    assert patched.status_code == 200
+    assert patched.json()["priority"] == 5
+    assert patched.json()["playback_mode"] == "sequential"
+
+
+def test_manager_collection_writes_require_csrf(tmp_path: Path) -> None:
+    client = TestClient(_app(tmp_path))
+    _manager_session(client)
+
+    rejected = client.post(
+        "/manager/collections",
+        json={
+            "id": "shorts",
+            "name": "Shorts",
+            "source_directory": "shorts",
+            "processing_profile_id": "compatibility-4k-loudness",
+        },
+    )
+
+    assert rejected.status_code == 403
+
+
+def test_manager_surfaces_a_rejected_collection_verbatim(tmp_path: Path) -> None:
+    client = TestClient(_app(tmp_path))
+    _seed_collection(client)
+    csrf = _manager_session(client)
+
+    rejected = client.post(
+        "/manager/collections/films",
+        headers={"X-CSRF-Token": csrf, "If-Match-Revision": "1"},
+        json={"playback_mode": "custom", "ordered_clip_ids": []},
+    )
+
+    assert rejected.status_code == 422
+    assert "custom playback requires ordered clip IDs" in rejected.text
+
+
+def test_manager_creates_and_patches_a_profile(tmp_path: Path) -> None:
+    from cinema_collections_worker.profile_validation import ProcessingProfile
+
+    client = TestClient(_app(tmp_path))
+    csrf = _manager_session(client)
+    headers = {"X-CSRF-Token": csrf, "Content-Type": "application/json"}
+    settings = ProcessingProfile().model_dump(mode="json")
+
+    created = client.post(
+        "/manager/profiles",
+        headers=headers,
+        json={"id": "custom", "name": "Custom", "settings": settings},
+    )
+    assert created.status_code == 201
+
+    patched = client.post(
+        "/manager/profiles/custom",
+        headers={**headers, "If-Match-Revision": "1"},
+        json={"name": "Renamed"},
+    )
+
+    assert patched.status_code == 200
+    assert patched.json()["name"] == "Renamed"
+    listed = [profile["id"] for profile in client.get("/manager/profiles").json()]
+    assert "custom" in listed

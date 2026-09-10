@@ -15,6 +15,7 @@ from fastapi import Body, FastAPI, Header, HTTPException, Query, Request, Upload
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, ConfigDict, Field
 
+from .domain import CollectionCreate, CollectionPatch, ProfileCreate, ProfilePatch
 from .library_manager import DeleteTarget, LibraryManager, TrashTarget, UploadKind
 from .settings import WorkerMode, WorkerSettings
 
@@ -180,11 +181,27 @@ def _job_target(kind: str, payload_json: Any) -> str:
     return ""
 
 
-def _collection_payloads(database: Any) -> list[dict[str, str]]:
-    rows = database.connection.execute(
-        "SELECT id, name FROM collections ORDER BY name COLLATE NOCASE, id"
+def _collection_payloads(app: FastAPI) -> list[dict[str, Any]]:
+    rows = app.state.database.connection.execute(
+        "SELECT id FROM collections ORDER BY name COLLATE NOCASE, id"
     ).fetchall()
-    return [{"id": str(row["id"]), "name": str(row["name"])} for row in rows]
+    return [app.state.collections.get(str(row["id"])).model_dump(mode="json") for row in rows]
+
+
+def _profile_payloads(app: FastAPI) -> list[dict[str, Any]]:
+    rows = app.state.database.connection.execute(
+        "SELECT id FROM profiles ORDER BY name COLLATE NOCASE, id"
+    ).fetchall()
+    return [app.state.profiles.get(str(row["id"])).model_dump(mode="json") for row in rows]
+
+
+def _revision(header: str | None) -> int:
+    if header is None:
+        raise HTTPException(status_code=428, detail="If-Match-Revision is required")
+    try:
+        return int(header)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="If-Match-Revision must be an integer") from exc
 
 
 def _dump(value: Any) -> Any:
@@ -238,10 +255,76 @@ def install_manager_routes(app: FastAPI, settings: WorkerSettings) -> None:
         return _clip_payloads(request.app.state.database)
 
     @app.get("/manager/collections", include_in_schema=False)
-    def list_manager_collections(request: Request) -> list[dict[str, str]]:
+    def list_manager_collections(request: Request) -> list[dict[str, Any]]:
         if _valid_session(request) is None:
             raise HTTPException(status_code=401, detail="Library Manager session required")
-        return _collection_payloads(request.app.state.database)
+        return _collection_payloads(request.app)
+
+    @app.post("/manager/collections", status_code=201, include_in_schema=False)
+    def create_manager_collection(
+        request: Request,
+        payload: CollectionCreate,
+        csrf: Annotated[str | None, Header(alias="X-CSRF-Token")] = None,
+    ) -> dict[str, Any]:
+        _require_action(request, csrf)
+        record = request.app.state.collections.create(
+            payload, actor="library-manager", request_id=request.state.request_id
+        )
+        return record.model_dump(mode="json")
+
+    @app.post("/manager/collections/{collection_id}", include_in_schema=False)
+    def patch_manager_collection(
+        request: Request,
+        collection_id: str,
+        payload: CollectionPatch,
+        csrf: Annotated[str | None, Header(alias="X-CSRF-Token")] = None,
+        revision: Annotated[str | None, Header(alias="If-Match-Revision")] = None,
+    ) -> dict[str, Any]:
+        _require_action(request, csrf)
+        record = request.app.state.collections.patch(
+            collection_id,
+            _revision(revision),
+            payload,
+            actor="library-manager",
+            request_id=request.state.request_id,
+        )
+        return record.model_dump(mode="json")
+
+    @app.get("/manager/profiles", include_in_schema=False)
+    def list_manager_profiles(request: Request) -> list[dict[str, Any]]:
+        if _valid_session(request) is None:
+            raise HTTPException(status_code=401, detail="Library Manager session required")
+        return _profile_payloads(request.app)
+
+    @app.post("/manager/profiles", status_code=201, include_in_schema=False)
+    def create_manager_profile(
+        request: Request,
+        payload: ProfileCreate,
+        csrf: Annotated[str | None, Header(alias="X-CSRF-Token")] = None,
+    ) -> dict[str, Any]:
+        _require_action(request, csrf)
+        record = request.app.state.profiles.create(
+            payload, actor="library-manager", request_id=request.state.request_id
+        )
+        return record.model_dump(mode="json")
+
+    @app.post("/manager/profiles/{profile_id}", include_in_schema=False)
+    def patch_manager_profile(
+        request: Request,
+        profile_id: str,
+        payload: ProfilePatch,
+        csrf: Annotated[str | None, Header(alias="X-CSRF-Token")] = None,
+        revision: Annotated[str | None, Header(alias="If-Match-Revision")] = None,
+    ) -> dict[str, Any]:
+        _require_action(request, csrf)
+        record = request.app.state.profiles.patch(
+            profile_id,
+            _revision(revision),
+            payload,
+            actor="library-manager",
+            request_id=request.state.request_id,
+        )
+        return record.model_dump(mode="json")
 
     @app.get("/manager/session", include_in_schema=False)
     def manager_session(request: Request) -> dict[str, str]:
