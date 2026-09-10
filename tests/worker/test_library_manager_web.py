@@ -919,3 +919,66 @@ def test_manager_order_reset_uses_compiled_output_path_and_preserves_saved_missi
     assert "Unavailable clip" in html
     assert "bridge.ids.map" in html
     assert "catalogOrderClips.map(clip => clip.id)" in html
+
+
+def _seed_catalogued_clip(client: TestClient, name: str = "clip.mp4") -> str:
+    response = client.post(
+        "/manager/upload?collection_id=films",
+        headers={"X-Filename": name, "X-CSRF-Token": _manager_session(client)},
+        content=b"clip-bytes",
+    )
+    assert response.status_code == 201
+    return response.json()["id"]
+
+
+def test_manager_clips_route_returns_the_catalog_as_json(tmp_path: Path) -> None:
+    client = TestClient(_app(tmp_path))
+    _seed_collection(client)
+    clip_id = _seed_catalogued_clip(client)
+
+    payload = client.get("/manager/clips").json()
+
+    assert [entry["id"] for entry in payload] == [clip_id]
+    assert set(payload[0]) == {
+        "id",
+        "collection_id",
+        "relative_source_path",
+        "relative_output_path",
+        "output_available",
+        "state",
+        "duration_seconds",
+        "sequential_rank",
+        "tags",
+        "notes",
+        "failed_reason",
+    }
+    assert payload[0]["collection_id"] == "films"
+    assert payload[0]["tags"] == []
+    assert payload[0]["failed_reason"] is None
+
+
+def test_manager_clips_route_requires_a_session(tmp_path: Path) -> None:
+    client = TestClient(_app(tmp_path))
+
+    assert client.get("/manager/clips").status_code == 401
+    assert client.get("/manager/collections").status_code == 401
+    assert client.get("/manager/session").status_code == 401
+
+
+def test_manager_session_route_mints_a_fresh_order_capability(tmp_path: Path) -> None:
+    client = TestClient(_app(tmp_path))
+    csrf = _manager_session(client)
+
+    payload = client.get("/manager/session").json()
+
+    assert payload["csrf"] == csrf
+    assert payload["worker_version"]
+    assert "." in payload["order_bridge_capability"]
+
+
+def test_manager_collections_route_lists_configured_collections(tmp_path: Path) -> None:
+    client = TestClient(_app(tmp_path))
+    _seed_collection(client)
+    _manager_session(client)
+
+    assert client.get("/manager/collections").json() == [{"id": "films", "name": "Films"}]

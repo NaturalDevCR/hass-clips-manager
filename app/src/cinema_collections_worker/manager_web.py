@@ -213,6 +213,59 @@ def _render_clip_row(row: Any, *, sequential_rank: int) -> str:
     )
 
 
+def _clip_payloads(database: Any) -> list[dict[str, Any]]:
+    """Return every live clip, ranked the way the playback-order editor expects."""
+    rows = database.connection.execute(
+        "SELECT id, collection_id, relative_source_path, relative_output_path, state, "
+        "output_available, duration_seconds, metadata FROM clips "
+        "WHERE state <> 'deleted' ORDER BY updated_at DESC, id DESC"
+    ).fetchall()
+    by_collection: dict[str, list[Any]] = {}
+    for row in rows:
+        by_collection.setdefault(str(row["collection_id"]), []).append(row)
+    ranks: dict[str, int] = {}
+    for collection_rows in by_collection.values():
+        ordered = sorted(
+            collection_rows,
+            key=lambda row: (
+                str(row["relative_output_path"] or "").casefold(),
+                str(row["relative_output_path"] or ""),
+                str(row["id"]),
+            ),
+        )
+        ranks.update({str(row["id"]): rank for rank, row in enumerate(ordered)})
+    payloads: list[dict[str, Any]] = []
+    for row in rows:
+        metadata = json.loads(row["metadata"] or "{}")
+        state = str(row["state"])
+        failed_reason = metadata.get("failed_reason")
+        payloads.append(
+            {
+                "id": str(row["id"]),
+                "collection_id": str(row["collection_id"]),
+                "relative_source_path": str(row["relative_source_path"] or ""),
+                "relative_output_path": str(row["relative_output_path"] or ""),
+                "output_available": bool(row["output_available"]),
+                "state": state,
+                "duration_seconds": float(row["duration_seconds"] or 0),
+                "sequential_rank": ranks[str(row["id"])],
+                "tags": [str(tag) for tag in (metadata.get("tags") or [])],
+                "notes": str(metadata.get("notes") or ""),
+                "failed_reason": (
+                    str(failed_reason) if failed_reason and state in {"failed", "invalid"} else None
+                ),
+            }
+        )
+    return payloads
+
+
+def _collection_payloads(database: Any) -> list[dict[str, str]]:
+    rows = database.connection.execute(
+        "SELECT id, name FROM collections ORDER BY name COLLATE NOCASE, id"
+    ).fetchall()
+    return [{"id": str(row["id"]), "name": str(row["name"])} for row in rows]
+
+
 def _order_bridge_capability(settings: WorkerSettings) -> str:
     """Create a short-lived capability for the HA order bridge.
 
@@ -313,6 +366,30 @@ def install_manager_routes(app: FastAPI, settings: WorkerSettings) -> None:
         page.headers["X-CSRF-Token"] = csrf
         page.headers["Cache-Control"] = "no-store"
         return page
+
+    @app.get("/manager/clips", include_in_schema=False)
+    def list_manager_clips(request: Request) -> list[dict[str, Any]]:
+        if _valid_session(request) is None:
+            raise HTTPException(status_code=401, detail="Library Manager session required")
+        return _clip_payloads(request.app.state.database)
+
+    @app.get("/manager/collections", include_in_schema=False)
+    def list_manager_collections(request: Request) -> list[dict[str, str]]:
+        if _valid_session(request) is None:
+            raise HTTPException(status_code=401, detail="Library Manager session required")
+        return _collection_payloads(request.app.state.database)
+
+    @app.get("/manager/session", include_in_schema=False)
+    def manager_session(request: Request) -> dict[str, str]:
+        record = _valid_session(request)
+        if record is None:
+            raise HTTPException(status_code=401, detail="Library Manager session required")
+        _, csrf = record
+        return {
+            "csrf": csrf,
+            "worker_version": _worker_version(),
+            "order_bridge_capability": _order_bridge_capability(settings),
+        }
 
     @app.get("/manager/jobs/{job_id}", include_in_schema=False)
     def job_status(request: Request, job_id: str) -> Any:
