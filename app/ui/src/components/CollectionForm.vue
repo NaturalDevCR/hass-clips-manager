@@ -2,6 +2,7 @@
 import { computed, ref, watch } from "vue";
 import OrderEditor from "@/components/OrderEditor.vue";
 import { useClips } from "@/composables/useClips";
+import { deterministicClipCompare } from "@/composables/useOrder";
 import { useCollections } from "@/composables/useCollections";
 import type { Collection, PlaybackMode, Profile } from "@/types";
 
@@ -69,6 +70,12 @@ watch(
 
 const collectionClips = computed(() =>
   clips.value.filter((clip) => clip.collection_id === draft.value.id),
+);
+
+// Sequential playback derives its order from the compiled path, so it is shown
+// rather than arranged.
+const sequentialOrder = computed(() =>
+  [...collectionClips.value].sort(deterministicClipCompare).map((clip) => clip.id),
 );
 
 // The Worker refuses custom playback with no order, so the form does not offer
@@ -193,6 +200,12 @@ async function save(): Promise<void> {
       <OrderEditor
         v-if="draft.playback_mode === 'custom'"
         v-model="draft.ordered_clip_ids"
+        :clips="collectionClips"
+      />
+      <OrderEditor
+        v-else-if="draft.playback_mode === 'sequential'"
+        readonly
+        :model-value="sequentialOrder"
         :clips="collectionClips"
       />
     </section>
