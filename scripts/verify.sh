@@ -17,8 +17,16 @@ for translation in custom_components/cinema_collections/translations/*.json; do
     uv run python -m json.tool "$translation" >/dev/null
 done
 
+if command -v npm >/dev/null 2>&1; then
+    npm --prefix ui ci
+    npm --prefix ui run test:unit
+    npm --prefix ui run build
+else
+    echo "npm is unavailable; skipped the UI tests and build (CI runs them)." >&2
+fi
+
 if command -v docker >/dev/null 2>&1; then
-    docker build --file app/Dockerfile --tag cinema-collections-worker:verify app
+    docker build --file app/Dockerfile --tag cinema-collections-worker:verify .
 else
     echo "Docker is unavailable; skipped the local image build (CI runs it)." >&2
 fi

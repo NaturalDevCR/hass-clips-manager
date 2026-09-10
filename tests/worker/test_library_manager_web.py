@@ -60,7 +60,7 @@ def _manager_session(client: TestClient, *, ingress: bool = True) -> str:
     )
     response = client.get("/", headers=headers)
     assert response.status_code == 200
-    assert "Cinema Collections Library Manager" in response.text
+    assert '<div id="app">' in response.text
     assert client.cookies.get("cinema_collections_manager")
     return response.headers["X-CSRF-Token"]
 
@@ -78,63 +78,6 @@ def test_manager_requires_ingress_or_bearer_and_rejects_missing_csrf(tmp_path: P
 
     assert rejected.status_code == 403
     assert csrf
-
-
-def test_manager_page_only_uses_ingress_safe_relative_action_urls(tmp_path: Path) -> None:
-    # Home Assistant Ingress serves this page under a per-install path prefix
-    # (e.g. /api/hassio_ingress/<token>/). A client-side fetch() call to an
-    # absolute path (leading "/") resolves against the domain root instead of
-    # that prefix and never reaches this app. Every action URL the page's
-    # script builds must therefore be relative, matching the working
-    # stylesheet <link> reference.
-    client = TestClient(_app(tmp_path))
-    csrf = _manager_session(client)
-    assert csrf
-
-    html = client.get("/", headers={"X-Ingress-Path": "/api/hassio_ingress/session"}).text
-
-    assert "/manager/upload" not in html
-    assert "/manager/uploads" not in html
-    assert "/manager/clips" not in html
-    assert "/manager/trash" not in html
-    assert "/manager/assets" not in html
-    assert "/manager/collections" not in html
-    assert "/manager/logs" not in html
-    assert "/manager/jobs" not in html
-    assert "`manager/uploads?${params}`" in html
-    assert "`manager/uploads/${uploadId}/chunk`" in html
-    assert "`manager/uploads/${uploadId}/finish`" in html
-    assert "`manager/uploads/${uploadId}/abort`" in html
-    assert "`manager/clips/${id}/${action}`" in html
-    assert "`manager/clips/${id}/delete-confirmation?target=${target}`" in html
-    assert "`manager/clips/${id}/delete`" in html
-    assert "`manager/clips/${id}/metadata`" in html
-    assert "`manager/clips/${id}/move`" in html
-    assert "`manager/collections/${id}/directories`" in html
-    assert "'manager/trash'" in html
-    assert "`manager/trash/${id}/restore`" in html
-    assert "'manager/assets'" in html
-    assert "`manager/assets/${encodeURIComponent(name)}/delete`" in html
-    assert "'manager/logs'" in html
-    assert "'manager/jobs'" in html
-
-
-def test_manager_page_supports_multi_file_upload_with_cache_busted_stylesheet(
-    tmp_path: Path,
-) -> None:
-    client = TestClient(_app(tmp_path))
-    _manager_session(client)
-
-    html = client.get("/", headers={"X-Ingress-Path": "/api/hassio_ingress/session"}).text
-
-    assert 'type="file" accept="video/*" multiple required' in html
-    assert 'href="static/manager.css?v=' in html
-    assert 'id="upload-progress"' in html
-    assert 'id="scan-form"' in html
-    assert "/manager/scan" not in html
-    assert "'manager/scan'" in html
-    assert "Collection ID" in html
-    assert "not a folder path" in html
 
 
 def test_manager_scan_route_queues_a_library_wide_or_scoped_scan_job(tmp_path: Path) -> None:
@@ -205,208 +148,6 @@ def test_manager_asset_upload_and_listing_round_trip(tmp_path: Path) -> None:
         content=b"clip",
     )
     assert rejected.status_code == 403
-
-    html = client.get("/", headers={"X-Ingress-Path": "/api/hassio_ingress/session"}).text
-    assert 'id="asset-upload-form"' in html
-    assert 'id="asset-list"' in html
-
-
-def test_manager_page_renders_full_clip_row_actions(tmp_path: Path) -> None:
-    client = TestClient(_app(tmp_path))
-    _seed_collection(client)
-    csrf = _manager_session(client)
-    headers = {"X-CSRF-Token": csrf}
-    uploaded = client.post(
-        "/manager/upload?collection_id=films",
-        headers={**headers, "X-Filename": "clip.mp4"},
-        content=b"clip",
-    )
-    assert uploaded.status_code == 201
-
-    html = client.get("/", headers={"X-Ingress-Path": "/api/hassio_ingress/session"}).text
-
-    assert 'data-action="recompile"' in html
-    assert 'data-action="manage-toggle"' in html
-    assert 'aria-expanded="false"' in html
-    assert 'class="row-panel"' in html
-    assert "Move to trash" in html
-    assert "Permanently delete" in html
-    assert 'class="trash-target"' in html
-    assert 'data-action="trash"' in html
-    assert 'class="delete-target"' in html
-    assert 'data-action="delete"' in html
-    assert 'data-action="edit-toggle"' in html
-    assert 'data-action="move-toggle"' in html
-    assert 'class="row-form edit-form"' in html
-    assert 'class="row-form move-form"' in html
-    assert 'id="directory-form"' in html
-    assert 'id="trash-table"' in html
-
-
-def test_manager_page_renders_six_tabs_and_their_panels(tmp_path: Path) -> None:
-    client = TestClient(_app(tmp_path))
-    _manager_session(client)
-
-    html = client.get("/", headers={"X-Ingress-Path": "/api/hassio_ingress/session"}).text
-
-    assert 'role="tablist"' in html
-    assert html.count(' role="tab" ') == 6
-    assert html.count(' role="tabpanel" ') == 6
-    for panel, tab in [
-        ("panel-library", "Library"),
-        ("panel-order", "Playback order"),
-        ("panel-add", "Add clips"),
-        ("panel-assets", "Assets"),
-        ("panel-maintenance", "Maintenance"),
-        ("panel-diagnostics", "Diagnostics"),
-    ]:
-        short = panel.removeprefix("panel-")
-        assert f'id="{panel}"' in html
-        assert f'id="tab-{short}"' in html
-        assert f'aria-controls="{panel}"' in html
-        assert f'aria-labelledby="tab-{short}"' in html
-        assert f'data-panel="{short}"' in html
-        assert f'<button type="button" role="tab" id="tab-{short}"' in html
-        assert tab in html
-    assert 'aria-selected="true"' in html
-    assert "sessionStorage" in html
-
-
-def test_manager_clip_row_manage_panel_labels_targets_and_actions(tmp_path: Path) -> None:
-    client = TestClient(_app(tmp_path))
-    _seed_collection(client)
-    csrf = _manager_session(client)
-    headers = {"X-CSRF-Token": csrf}
-    client.post(
-        "/manager/upload?collection_id=films",
-        headers={**headers, "X-Filename": "clip.mp4"},
-        content=b"clip",
-    )
-
-    html = client.get("/", headers={"X-Ingress-Path": "/api/hassio_ingress/session"}).text
-
-    assert 'data-action="manage-toggle"' in html
-    assert 'aria-expanded="false"' in html
-    assert 'class="row-panel"' in html
-    assert 'class="row-panel-row"' in html
-    assert '" hidden><td colspan="8"><div class="row-panel">' in html
-    assert 'class="panel-label">Move to trash</span>' in html
-    assert 'class="panel-label">Permanently delete</span>' in html
-    assert 'class="trash-target"' in html
-    assert 'class="delete-target"' in html
-    assert 'data-action="trash"' in html
-    assert 'data-action="delete"' in html
-
-
-def test_manager_clip_row_keeps_clip_id_discoverable(tmp_path: Path) -> None:
-    client = TestClient(_app(tmp_path))
-    _seed_collection(client)
-    csrf = _manager_session(client)
-    headers = {"X-CSRF-Token": csrf}
-    uploaded = client.post(
-        "/manager/upload?collection_id=films",
-        headers={**headers, "X-Filename": "clip.mp4"},
-        content=b"clip",
-    )
-    assert uploaded.status_code == 201
-    clip_id = uploaded.json()["id"]
-
-    html = client.get("/", headers={"X-Ingress-Path": "/api/hassio_ingress/session"}).text
-
-    assert html.count(f'data-clip-id="{clip_id}"') == 2
-    assert f'title="{clip_id}"' in html
-
-
-def test_manager_clip_renders_hidden_full_width_panel_row(tmp_path: Path) -> None:
-    client = TestClient(_app(tmp_path))
-    _seed_collection(client)
-    csrf = _manager_session(client)
-    uploaded = client.post(
-        "/manager/upload?collection_id=films",
-        headers={"X-CSRF-Token": csrf, "X-Filename": "clip.mp4"},
-        content=b"clip",
-    )
-    assert uploaded.status_code == 201
-    clip_id = uploaded.json()["id"]
-
-    html = client.get("/", headers={"X-Ingress-Path": "/api/hassio_ingress/session"}).text
-
-    table = html.split('id="clips-table"', 1)[1].split("</table>", 1)[0]
-    column_count = table.count("<th>")
-    assert column_count == 8
-    assert html.count(f'data-clip-id="{clip_id}"') == 2
-    assert 'class="row-panel-row" data-clip-id="' in html
-    assert f'<td colspan="{column_count}"><div class="row-panel">' in html
-
-
-def test_manager_clip_renders_escaped_source_path_attribute(tmp_path: Path) -> None:
-    client = TestClient(_app(tmp_path))
-    _seed_collection(client)
-    _manager_session(client)
-    with client.app.state.database.connection:
-        client.app.state.database.connection.execute(
-            "INSERT INTO clips(id,collection_id,state,relative_source_path,relative_output_path,"
-            "duration_seconds,output_available,metadata,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
-            (
-                "44444444-4444-4444-4444-444444444444",
-                "films",
-                "ready",
-                'films/<b>&"clip".mp4',
-                "films/44444444-4444-4444-4444-444444444444.mp4",
-                0.0,
-                0,
-                "{}",
-                "2026-01-01T00:00:00+00:00",
-            ),
-        )
-
-    html = client.get("/", headers={"X-Ingress-Path": "/api/hassio_ingress/session"}).text
-
-    assert 'data-source-path="films/&lt;b&gt;&amp;&quot;clip&quot;.mp4"' in html
-    assert '"clip".mp4' not in html
-
-
-def test_manager_page_table_headers_include_clip_id_column(tmp_path: Path) -> None:
-    client = TestClient(_app(tmp_path))
-    _seed_collection(client)
-    _manager_session(client)
-    with client.app.state.database.connection:
-        client.app.state.database.connection.execute(
-            "INSERT INTO clips(id,collection_id,state,relative_source_path,relative_output_path,"
-            "duration_seconds,output_available,metadata,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
-            (
-                "33333333-3333-3333-3333-333333333333",
-                "films",
-                "ready",
-                "films/feature.mp4",
-                "films/33333333-3333-3333-3333-333333333333.mp4",
-                90.0,
-                1,
-                '{"tags": ["dawn"]}',
-                "2026-01-01T00:00:00+00:00",
-            ),
-        )
-
-    html = client.get("/", headers={"X-Ingress-Path": "/api/hassio_ingress/session"}).text
-
-    assert (
-        "<th>Collection</th><th>Source</th><th>State</th><th>Output</th>"
-        "<th>Duration</th><th>Tags</th><th>Clip ID</th><th>Actions</th>" in html
-    )
-    assert "<td>films</td>" in html
-    assert "feature.mp4" in html
-    assert 'title="films/feature.mp4"' in html
-    assert "<td>ready</td>" in html
-    assert "33333333-3333-3333-3333-333333333333.mp4" in html
-    assert 'title="films/33333333-3333-3333-3333-333333333333.mp4"' in html
-    assert "<td>1:30</td>" in html
-    assert "<td>dawn</td>" in html
-    # The full stable ID is visible in its own cell, not only in a tooltip.
-    assert '<td class="clip-id"><code>33333333-3333-3333-3333-333333333333</code>' in html
-    assert (
-        'data-action="copy-id" '
-        'aria-label="Copy clip ID 33333333-3333-3333-3333-333333333333"' in html
-    )
 
 
 def test_manager_routes_complete_exact_clip_lifecycle(tmp_path: Path) -> None:
@@ -595,22 +336,7 @@ def test_manager_asset_delete_surfaces_profile_reference_refusal(tmp_path: Path)
     assert client.get("/manager/assets").json() == ["intro.mp4"]
 
 
-def test_manager_page_contains_worker_log_and_recent_jobs_sections(tmp_path: Path) -> None:
-    client = TestClient(_app(tmp_path))
-    _manager_session(client)
-
-    html = client.get("/", headers={"X-Ingress-Path": "/api/hassio_ingress/session"}).text
-
-    assert 'id="log-table"' in html
-    assert 'id="log-refresh"' in html
-    assert 'id="jobs-table"' in html
-    assert 'id="jobs-refresh"' in html
-    assert "<th>Output</th>" in html
-    assert "<th>Duration</th>" in html
-    assert "<th>Tags</th>" in html
-
-
-def test_failed_clip_row_renders_failure_reason(tmp_path: Path) -> None:
+def test_failed_clip_reports_its_failure_reason(tmp_path: Path) -> None:
     client = TestClient(_app(tmp_path))
     _seed_collection(client)
     _manager_session(client)
@@ -631,10 +357,10 @@ def test_failed_clip_row_renders_failure_reason(tmp_path: Path) -> None:
             ),
         )
 
-    html = client.get("/", headers={"X-Ingress-Path": "/api/hassio_ingress/session"}).text
+    clip = client.get("/manager/clips").json()[0]
 
-    assert 'class="clip-failure"' in html
-    assert "loudness analysis failed" in html
+    assert clip["state"] == "failed"
+    assert clip["failed_reason"] == "loudness analysis failed"
 
 
 def test_failed_compile_persists_sanitized_clip_failure_reason(tmp_path: Path) -> None:
@@ -688,7 +414,7 @@ def test_failed_compile_persists_sanitized_clip_failure_reason(tmp_path: Path) -
     assert "[WORKER_ROOT]" in metadata["failed_reason"]
 
 
-def test_manager_page_renders_output_duration_and_tags_columns(tmp_path: Path) -> None:
+def test_manager_clips_report_output_duration_and_tags(tmp_path: Path) -> None:
     client = TestClient(_app(tmp_path))
     _seed_collection(client)
     _manager_session(client)
@@ -709,11 +435,12 @@ def test_manager_page_renders_output_duration_and_tags_columns(tmp_path: Path) -
             ),
         )
 
-    html = client.get("/", headers={"X-Ingress-Path": "/api/hassio_ingress/session"}).text
+    clip = client.get("/manager/clips").json()[0]
 
-    assert "films/22222222-2222-2222-2222-222222222222.mp4" in html
-    assert "2:05" in html
-    assert "night, featured" in html
+    assert clip["relative_output_path"] == "films/22222222-2222-2222-2222-222222222222.mp4"
+    assert clip["output_available"] is True
+    assert clip["duration_seconds"] == 125.5
+    assert clip["tags"] == ["night", "featured"]
 
 
 def test_manager_chunked_clip_upload_round_trip(tmp_path: Path) -> None:
@@ -796,28 +523,7 @@ def test_manager_chunked_upload_abort_removes_staging_and_requires_csrf(tmp_path
     assert client.post(f"/manager/uploads/{upload_id}/finish", headers=headers).status_code == 404
 
 
-def test_manager_page_renders_playback_order_panel_controls(tmp_path: Path) -> None:
-    client = TestClient(_app(tmp_path))
-    _manager_session(client)
-
-    html = client.get("/", headers={"X-Ingress-Path": "/api/hassio_ingress/session"}).text
-
-    assert 'id="panel-order"' in html
-    assert 'aria-labelledby="tab-order"' in html
-    assert 'data-panel="order"' in html
-    assert "<h2>Playback order</h2>" in html
-    assert '<label for="order-collection">Collection</label>' in html
-    assert '<select id="order-collection"></select>' in html
-    assert 'id="order-list"' in html
-    assert 'aria-label="Playback order"' in html
-    assert '<button type="button" id="order-save">Save order</button>' in html
-    assert '<button type="button" id="order-copy">Copy IDs</button>' in html
-    assert '<button type="button" id="order-reset">Reset to path order</button>' in html
-    assert 'id="order-result"' in html
-    assert "Copy IDs" in html
-
-
-def test_manager_clip_rows_carry_order_editor_data_attributes(tmp_path: Path) -> None:
+def test_manager_clips_carry_the_order_editor_fields(tmp_path: Path) -> None:
     client = TestClient(_app(tmp_path))
     _seed_collection(client)
     _manager_session(client)
@@ -838,84 +544,119 @@ def test_manager_clip_rows_carry_order_editor_data_attributes(tmp_path: Path) ->
             ),
         )
 
-    html = client.get("/", headers={"X-Ingress-Path": "/api/hassio_ingress/session"}).text
+    clip = client.get("/manager/clips").json()[0]
 
-    assert 'data-collection="films"' in html
-    assert 'data-state="ready"' in html
-    assert 'data-duration-seconds="125.5"' in html
-    assert 'data-source-path="films/feature.mp4"' in html
-    assert 'data-sequential-rank="' in html
+    assert clip["collection_id"] == "films"
+    assert clip["state"] == "ready"
+    assert clip["duration_seconds"] == 125.5
+    assert clip["relative_source_path"] == "films/feature.mp4"
+    assert clip["sequential_rank"] == 0
 
 
-def test_manager_order_editor_lists_empty_configured_collections(tmp_path: Path) -> None:
+def test_manager_collections_include_collections_without_clips(tmp_path: Path) -> None:
     client = TestClient(_app(tmp_path))
     _seed_collection(client)
     _manager_session(client)
 
-    html = client.get("/", headers={"X-Ingress-Path": "/api/hassio_ingress/session"}).text
-
-    assert '<select id="order-collection"><option value="films">Films</option></select>' in html
+    assert client.get("/manager/collections").json() == [{"id": "films", "name": "Films"}]
 
 
-def test_manager_order_editor_uses_same_origin_absolute_bridge_url_only(tmp_path: Path) -> None:
-    # The Home Assistant bridge lives at the domain root, outside the Ingress
-    # prefix, so it is the one URL the page builds as a same-origin absolute
-    # URL. Every Worker route stays relative.
+def _seed_catalogued_clip(client: TestClient, name: str = "clip.mp4") -> str:
+    response = client.post(
+        "/manager/upload?collection_id=films",
+        headers={"X-Filename": name, "X-CSRF-Token": _manager_session(client)},
+        content=b"clip-bytes",
+    )
+    assert response.status_code == 201
+    return response.json()["id"]
+
+
+def test_manager_clips_route_returns_the_catalog_as_json(tmp_path: Path) -> None:
     client = TestClient(_app(tmp_path))
+    _seed_collection(client)
+    clip_id = _seed_catalogued_clip(client)
+
+    payload = client.get("/manager/clips").json()
+
+    assert [entry["id"] for entry in payload] == [clip_id]
+    assert set(payload[0]) == {
+        "id",
+        "collection_id",
+        "relative_source_path",
+        "relative_output_path",
+        "output_available",
+        "state",
+        "duration_seconds",
+        "sequential_rank",
+        "tags",
+        "notes",
+        "failed_reason",
+    }
+    assert payload[0]["collection_id"] == "films"
+    assert payload[0]["tags"] == []
+    assert payload[0]["failed_reason"] is None
+
+
+def test_manager_clips_route_requires_a_session(tmp_path: Path) -> None:
+    client = TestClient(_app(tmp_path))
+
+    assert client.get("/manager/clips").status_code == 401
+    assert client.get("/manager/collections").status_code == 401
+    assert client.get("/manager/session").status_code == 401
+
+
+def test_manager_session_route_mints_a_fresh_order_capability(tmp_path: Path) -> None:
+    client = TestClient(_app(tmp_path))
+    csrf = _manager_session(client)
+
+    payload = client.get("/manager/session").json()
+
+    assert payload["csrf"] == csrf
+    assert payload["worker_version"]
+    assert "." in payload["order_bridge_capability"]
+
+
+def test_manager_collections_route_lists_configured_collections(tmp_path: Path) -> None:
+    client = TestClient(_app(tmp_path))
+    _seed_collection(client)
     _manager_session(client)
 
-    html = client.get("/", headers={"X-Ingress-Path": "/api/hassio_ingress/session"}).text
-
-    assert "'/api/cinema_collections/order'" in html
-    assert "window.location.origin" in html
-    assert "new URL(ORDER_BRIDGE_PATH, window.location.origin)" in html
-    assert "ordered_clip_ids" in html
-    assert 'name="order-bridge-capability"' in html
-    assert "X-Cinema-Collections-Order-Capability" in html
-    assert "new URL(ORDER_BRIDGE_PATH, window.location.origin)" in html
-    # No absolute Worker URLs snuck in with the new UI.
-    assert "fetch('/" not in html
-    assert 'fetch("/' not in html
-    assert "fetch(`/" not in html
-    assert 'src="/' not in html
-    assert 'href="/' not in html
+    assert client.get("/manager/collections").json() == [{"id": "films", "name": "Films"}]
 
 
-def test_manager_order_editor_fallback_copy_and_keyboard_drag_support(tmp_path: Path) -> None:
+def test_manager_page_serves_the_single_page_shell(tmp_path: Path) -> None:
     client = TestClient(_app(tmp_path))
-    _manager_session(client)
 
-    html = client.get("/", headers={"X-Ingress-Path": "/api/hassio_ingress/session"}).text
+    response = client.get("/", headers={"X-Ingress-Path": "/api/hassio_ingress/session"})
 
-    # Clipboard API with a visible textarea fallback for non-secure contexts.
-    assert "navigator.clipboard" in html
-    assert "execCommand('copy')" in html
-    # Bridge-unavailable and save-failure guidance must point at the copy path.
-    assert "bridge is unavailable" in html
-    assert "not saved" in html
-    # HTML5 drag-and-drop plus keyboard reordering on the drag handle.
-    assert "draggable = true" in html
-    assert "order-handle" in html
-    assert "ArrowUp" in html
-    assert "ArrowDown" in html
-    assert "Multiple Cinema Collections entries" in html
-    # Deterministic reset mirrors sequential playback: path casefold, then
-    # original path, then clip ID.
-    assert "deterministicClipCompare" in html
-    assert "toLowerCase()" in html
+    assert response.status_code == 200
+    assert '<div id="app">' in response.text
+    assert response.headers["Cache-Control"] == "no-store"
+    assert response.headers["X-CSRF-Token"]
+    assert client.cookies.get("cinema_collections_manager")
 
 
-def test_manager_order_reset_uses_compiled_output_path_and_preserves_saved_missing_ids(
-    tmp_path: Path,
+def test_manager_shell_never_uses_ingress_breaking_absolute_asset_urls(
+    tmp_path: Path, manager_ui_shell: Path
 ) -> None:
+    # Home Assistant Ingress serves this page under a per-install path prefix.
+    # An asset URL with a leading "/" resolves against the domain root instead
+    # of that prefix and never reaches this app, so the built shell must only
+    # reference its bundle relatively.
     client = TestClient(_app(tmp_path))
-    _manager_session(client)
 
-    html = client.get("/", headers={"X-Ingress-Path": "/api/hassio_ingress/session"}).text
+    body = client.get("/", headers={"X-Ingress-Path": "/api/hassio_ingress/session"}).text
 
-    assert "outputPath: row.dataset.outputPath" in html
-    assert "const pathA = a.outputPath || a.sourcePath" in html
-    assert "pathA.toLowerCase()" in html
-    assert "Unavailable clip" in html
-    assert "bridge.ids.map" in html
-    assert "catalogOrderClips.map(clip => clip.id)" in html
+    assert 'src="/' not in body
+    assert 'href="/' not in body
+    assert manager_ui_shell.is_file()
+
+
+def test_manager_page_reports_an_unbuilt_interface(tmp_path: Path, manager_ui_shell: Path) -> None:
+    client = TestClient(_app(tmp_path))
+    manager_ui_shell.unlink()
+
+    response = client.get("/", headers={"X-Ingress-Path": "/api/hassio_ingress/session"})
+
+    assert response.status_code == 503
+    assert "npm --prefix ui" in response.json()["message"]

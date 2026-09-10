@@ -144,8 +144,8 @@ profile ID**.
 
 You have two ways to add source clips to the collection:
 
-- **Upload through the Library Manager.** In the **Import source clips** form,
-  enter the collection's short ID and select one or more video files. The
+- **Upload through the Library Manager.** In the **Import** section's **Upload
+  source clips** form, pick the collection and select one or more video files. The
   manager sends each file as fixed-size chunks (8 MiB) through the chunked
   upload endpoints, so requests stay small enough to pass through reverse
   proxies that cap request-body size. The server stages chunks and never
@@ -153,8 +153,8 @@ You have two ways to add source clips to the collection:
 - **Scan for files already on disk.** Place files under the collection's source
   directory by any means — the Home Assistant Files add-on, Samba, a mounted
   network share — then use the **Scan for files already on disk** form in the
-  Library Manager with the collection's short ID. Use the collection ID, not a
-  folder path.
+  Library Manager's **Import** section with the collection's short ID. Use the
+  collection ID, not a folder path.
 
 Scanning avoids browser upload size limits entirely. Prefer it for large
 libraries or when a reverse proxy in front of Home Assistant caps request
@@ -166,7 +166,8 @@ Intro and outro files are uploaded, not dropped in a folder. The assets root
 lives in the Worker's private storage (`/data/assets`), not under `/media`, so
 you cannot reach it through a media share.
 
-In the Library Manager's **Intro/outro assets** section, upload the files, then
+In the Library Manager's **Import** section, under **Intro and outro assets**,
+upload the files, then
 reference the exact filename shown in the list in the processing profile's
 **Intro asset filename** and **Outro asset filename** fields. The profile
 editor's intro and outro fields are dropdowns populated from the uploaded
@@ -181,8 +182,9 @@ twice.
 
 With the collection configured and clips present, compile them:
 
-- Use the **Recompile** action on a clip row in the Library Manager's clip
-  table to compile one clip.
+- Open a clip in the Library Manager's **Library** section and use its
+  **Recompile** action to compile one clip, or select several clips and
+  recompile them together.
 - Use the `cinema_collections.compile_all` or `cinema_collections.compile_collection`
   service, or the corresponding **Compile all collections** button, to compile
   every enabled collection or one collection.
@@ -192,7 +194,7 @@ percentage while it runs. The integration's **Current job progress** sensor
 (`current_job_progress`) reports the same percentage for your dashboard.
 
 Optional: to control the exact playback sequence, open the Library Manager's
-**Playback order** tab, pick the collection, and arrange the clips by
+**Playback order** section, pick the collection, and arrange the clips by
 drag-and-drop (or with the arrow keys on a row's drag handle). **Save order**
 stores the custom order in the collection's settings through the Home
 Assistant bridge; if Save is disabled because the bridge is unavailable, use

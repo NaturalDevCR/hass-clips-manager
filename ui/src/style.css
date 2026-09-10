@@ -1,0 +1,59 @@
+@import "tailwindcss";
+
+/* Dark-first media-manager palette. Surfaces separate by luminance rather than
+   by borders, so the catalog reads as depth instead of as a grid of boxes. */
+@theme {
+  --color-ground: #0b0d12;
+  --color-surface: #141821;
+  --color-raised: #1c212c;
+  --color-hover: #232936;
+  --color-line: #2b3240;
+  --color-ink: #e8eaf0;
+  --color-muted: #99a1b3;
+  --color-accent: #e8a33d;
+  --color-accent-ink: #1a1204;
+  --color-ok: #4ba97a;
+  --color-warn: #d99b2b;
+  --color-danger: #d9564f;
+  --radius-panel: 0.75rem;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-ground);
+  color: var(--color-ink);
+  font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  line-height: 1.5;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+@utility field {
+  @apply w-full rounded-lg border border-line bg-ground px-3 py-2 text-sm text-ink
+    placeholder:text-muted focus:border-accent focus:outline-none;
+}
+
+@utility btn {
+  @apply inline-flex items-center justify-center gap-2 rounded-lg border border-line
+    bg-raised px-3 py-2 text-sm font-medium text-ink transition
+    hover:bg-hover disabled:cursor-not-allowed disabled:opacity-45;
+}
+
+@utility btn-primary {
+  @apply inline-flex items-center justify-center gap-2 rounded-lg border border-accent
+    bg-accent px-3 py-2 text-sm font-semibold text-accent-ink transition
+    hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-45;
+}
+
+@utility panel {
+  @apply rounded-panel border border-line bg-surface p-5;
+}

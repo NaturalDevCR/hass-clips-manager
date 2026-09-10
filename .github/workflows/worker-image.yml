@@ -33,7 +33,7 @@ jobs:
         run: echo "IMAGE_REPOSITORY=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/cinema-collections-worker" >> "$GITHUB_ENV"
       - uses: docker/build-push-action@v6
         with:
-          context: app
+          context: .
           file: app/Dockerfile
           platforms: ${{ matrix.platform }}
           build-args: BUILD_ARCH=${{ matrix.build_arch }}
