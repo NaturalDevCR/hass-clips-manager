@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from "vue";
 import ClipCard from "@/components/ClipCard.vue";
 import ClipDrawer from "@/components/ClipDrawer.vue";
+import BulkBar from "@/components/BulkBar.vue";
 import ClipTable from "@/components/ClipTable.vue";
 import { useClips } from "@/composables/useClips";
 import { useSession } from "@/composables/useSession";
@@ -17,6 +18,8 @@ const {
   states,
   load,
   toggle,
+  selectAll,
+  clearSelection,
 } = useClips();
 const { collections } = useSession();
 
@@ -120,10 +123,17 @@ onMounted(async () => {
       {{ error }}
     </p>
 
-    <p class="text-xs text-muted">
-      {{ filtered.length }} of {{ clips.length }} clips
-      <span v-if="selected.size"> · {{ selected.size }} selected</span>
-    </p>
+    <div class="flex flex-wrap items-center gap-3 text-xs text-muted">
+      <span>{{ filtered.length }} of {{ clips.length }} clips</span>
+      <button
+        v-if="filtered.length"
+        type="button"
+        class="underline"
+        @click="selectAll(filtered.map((clip) => clip.id))"
+      >
+        Select all shown
+      </button>
+    </div>
 
     <p v-if="!clips.length" class="panel text-sm text-muted">
       No catalogued clips yet. Add some from the Import section.
@@ -151,6 +161,14 @@ onMounted(async () => {
       :selected="selected"
       @toggle="toggle"
       @open="openClipId = $event.id"
+    />
+
+    <BulkBar
+      v-if="selected.size"
+      :clips="clips"
+      :selected="selected"
+      @done="reload"
+      @clear="clearSelection"
     />
 
     <ClipDrawer
