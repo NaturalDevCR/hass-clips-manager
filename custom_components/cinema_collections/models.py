@@ -212,15 +212,20 @@ class WorkerCollection:
 
     id: str
     name: str
+    source_directory: str
+    processing_profile_id: str
     enabled: bool
     priority: int
     is_default: bool
     allow_manual_override: bool
+    tags: tuple[str, ...]
+    notes: str | None
     starts_at: str | None
     ends_at: str | None
     schedule: Mapping[str, Any]
     playback_mode: str
     ordered_clip_ids: tuple[str, ...]
+    revision: int
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any]) -> WorkerCollection:
@@ -231,6 +236,9 @@ class WorkerCollection:
         priority = payload.get("priority")
         if isinstance(priority, bool) or not isinstance(priority, int):
             raise WorkerContractError("Worker response field 'priority' must be an integer")
+        revision = payload.get("revision")
+        if isinstance(revision, bool) or not isinstance(revision, int) or revision < 1:
+            raise WorkerContractError("Worker response field 'revision' must be a positive integer")
         for name in ("starts_at", "ends_at"):
             value = payload.get(name)
             if value is not None and not isinstance(value, str):
@@ -248,13 +256,24 @@ class WorkerCollection:
         playback_mode = payload.get("playback_mode", "random")
         if not isinstance(playback_mode, str):
             raise WorkerContractError("Worker response field 'playback_mode' must be a string")
+        raw_tags = payload.get("tags", [])
+        if not isinstance(raw_tags, list):
+            raise WorkerContractError("Worker response field 'tags' must be an array")
+        tags = cast(list[object], raw_tags)
+        notes = payload.get("notes")
+        if notes is not None and not isinstance(notes, str):
+            raise WorkerContractError("Worker response field 'notes' must be a string or null")
         return cls(
             id=_required_string(payload, "id"),
             name=_required_string(payload, "name"),
+            source_directory=_required_string(payload, "source_directory"),
+            processing_profile_id=_required_string(payload, "processing_profile_id"),
             enabled=bool(payload["enabled"]),
             priority=priority,
             is_default=bool(payload["is_default"]),
             allow_manual_override=bool(payload["allow_manual_override"]),
+            tags=tuple(str(tag) for tag in tags),
+            notes=notes,
             starts_at=cast(str | None, payload.get("starts_at")),
             ends_at=cast(str | None, payload.get("ends_at")),
             schedule=MappingProxyType(
@@ -262,4 +281,5 @@ class WorkerCollection:
             ),
             playback_mode=playback_mode,
             ordered_clip_ids=tuple(cast(list[str], order)),
+            revision=revision,
         )

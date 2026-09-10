@@ -16,10 +16,8 @@ from .const import (
     CONF_HISTORY_RESET_TIME,
     CONF_OVERRIDE_COLLECTION_ID,
     CONF_OVERRIDE_MODE,
-    CONF_SYNC_ON_STARTUP,
     DEFAULT_HISTORY_RESET_MODE,
     DEFAULT_HISTORY_RESET_TIME,
-    DEFAULT_SYNC_ON_STARTUP,
     HistoryResetMode,
 )
 from .resolver import OverrideKind, OverrideMode
@@ -59,10 +57,6 @@ def _options_schema(defaults: Mapping[str, Any]) -> vol.Schema:
                 CONF_HISTORY_RESET_TIME,
                 default=defaults.get(CONF_HISTORY_RESET_TIME, DEFAULT_HISTORY_RESET_TIME),
             ): str,
-            vol.Required(
-                CONF_SYNC_ON_STARTUP,
-                default=defaults.get(CONF_SYNC_ON_STARTUP, DEFAULT_SYNC_ON_STARTUP),
-            ): bool,
         }
     )
 
@@ -99,7 +93,6 @@ class CinemaCollectionsOptionsFlow(config_entries.OptionsFlow):
                     else None,
                     CONF_HISTORY_RESET_MODE: reset_mode.value,
                     CONF_HISTORY_RESET_TIME: reset_time.strftime("%H:%M"),
-                    CONF_SYNC_ON_STARTUP: bool(user_input[CONF_SYNC_ON_STARTUP]),
                 }
                 return self.async_create_entry(title="", data=result)
 

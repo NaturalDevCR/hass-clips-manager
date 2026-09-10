@@ -30,8 +30,7 @@
           "override_mode": "Selection mode",
           "override_collection_id": "Collection for explicit mode",
           "history_reset_mode": "History reset mode",
-          "history_reset_time": "Daily history reset time (daily mode only)",
-          "sync_on_startup": "Synchronize configuration on startup"
+          "history_reset_time": "Daily history reset time (daily mode only)"
         }
       }
     },

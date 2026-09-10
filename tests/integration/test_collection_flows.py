@@ -314,7 +314,6 @@ def test_options_schema_is_serializable_for_the_frontend() -> None:
             "override_collection_id",
             "history_reset_mode",
             "history_reset_time",
-            "sync_on_startup",
         }
 
 

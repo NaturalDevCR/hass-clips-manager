@@ -214,6 +214,34 @@ class WorkerApiClient:
                 )
             page += 1
 
+    async def async_list_profile_records(self) -> dict[str, Mapping[str, Any]]:
+        """Return each profile's full record, for verifying a migration."""
+        page = 1
+        settings: dict[str, Mapping[str, Any]] = {}
+        while True:
+            payload = await self._async_get(f"/profiles?page={page}&page_size=100")
+            total = payload.get("total")
+            raw_items = payload.get("items")
+            if (
+                isinstance(total, bool)
+                or not isinstance(total, int)
+                or not isinstance(raw_items, list)
+            ):
+                raise WorkerApiProtocolError(
+                    "Worker profiles response did not match the API contract"
+                )
+            items = cast(list[object], raw_items)
+            for item in items:
+                if not isinstance(item, Mapping):
+                    raise WorkerApiProtocolError(
+                        "Worker profiles response did not match the API contract"
+                    )
+                record = cast(Mapping[str, Any], item)
+                settings[str(record.get("id"))] = record
+            if len(settings) >= total or not items:
+                return settings
+            page += 1
+
     async def async_list_assets(self) -> tuple[str, ...]:
         """Return the Worker's uploaded intro/outro asset filenames."""
         payload = await self._async_get_list("/assets")
