@@ -50,8 +50,7 @@ folder as the Docker build context, so nothing the image needs may sit outside i
 started without that bundle answers `GET /` with 503 naming the build command,
 so copy `app/ui/dist` there when running the Worker directly from a checkout.
 
-Two constraints hold for anything the interface fetches. Home Assistant serves
-the App under a per-install Ingress prefix, so every Worker URL must be
-relative and the router runs in hash mode; the sole exception is the Home
-Assistant order bridge, which is built as a same-origin absolute URL because it
-lives at the domain root, outside that prefix.
+One constraint holds for anything the interface fetches. Home Assistant serves
+the App under a per-install Ingress prefix, so every Worker URL must be relative
+and the router runs in hash mode; a leading "/" resolves against the domain root
+and never reaches the Worker.

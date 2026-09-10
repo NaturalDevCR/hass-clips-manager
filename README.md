@@ -13,9 +13,10 @@ It has two components:
   uploads, disk scans, and intro/outro assets; and System, for folders, trash,
   jobs, and the worker log.
 - **Cinema Collections integration** — a HACS integration that pairs with the
-  Worker, stores collection policy and typed processing profiles (edited through
-  a field-by-field form, not JSON), and exposes monitoring sensors, buttons, a
-  collection-override Select, and the `select_next_clip` automation service.
+  Worker and exposes it to automations: monitoring sensors, buttons, a
+  collection-override Select, the `select_next_clip` service, and dispatch of
+  the compilation schedules the Worker stores. Collections and processing
+  profiles are configured in the Worker's Library Manager, not here.
 
 The integration only selects media; it never plays it and never touches a
 device.

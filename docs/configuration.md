@@ -46,15 +46,11 @@ The global **Options** flow exposes collection-selection policy without YAML:
 - `history_reset_time` (**Daily history reset time**) — the local time at which
   every collection's no-repeat playback history resets; default `00:00`,
   minute precision only. Applies only when `history_reset_mode` is `daily`.
-- `sync_on_startup` (**Synchronize configuration on startup**) — whether local
-  subentry revisions are re-synchronized to the Worker at startup; default
-  enabled.
+## Collections
 
-## Collection subentries
-
-Each collection is a **Collection** config subentry on the integration entry.
-Creating or editing one synchronizes the Worker, which rejects values it cannot
-accept and returns the error in the form. The fields are:
+Collections live in the Worker and are edited in the Library Manager's
+**Collections** section, not in Home Assistant. The Worker validates every
+value and returns its refusal in the form. The fields are:
 
 | Field | Meaning |
 | --- | --- |
@@ -107,7 +103,7 @@ the next result; random previews are not guaranteed to match the next selection.
 
 ## Processing profile editor
 
-The **Processing profile** config subentry is a field-by-field form, not a raw
+The processing-profile editor in the Library Manager is a field-by-field form, not a raw
 JSON textarea. It groups the settings that were previously edited as JSON into
 typed fields with per-field bounds. Submitting validates the profile, and the
 Worker rejects invalid combinations such as a `required` audio missing policy

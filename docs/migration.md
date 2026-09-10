@@ -1,5 +1,34 @@
 # Migration and rollback
 
+## Moving configuration into the Worker
+
+Integration 2.0.0 moves collections and processing profiles out of the Home
+Assistant config entry and into the Worker, which executes them. Playback order
+and collection schedule times move with them.
+
+**Take a backup first.** Back up Home Assistant before updating, so the config
+entry's contents are recoverable.
+
+The first time the updated integration starts, it migrates the entry once:
+
+1. It pushes every collection and profile subentry to the Worker.
+2. It reads them back and compares each record field by field.
+3. Only on a full match does it remove the subentries and mark the entry
+   migrated.
+
+Anything else — an unreachable Worker, a rejected record, a value the Worker
+stored differently — leaves the configuration in Home Assistant untouched and
+retries on the next startup. Every pushed payload is written to the log at info
+level before anything is deleted, so it can be recovered from the log if needed.
+
+The integration requires Worker 1.8.0 or newer. Against an older Worker it
+refuses to set up and names the version to install, because an older Worker
+rejects the policy fields rather than storing them.
+
+After migrating, collections and profiles are edited in the Library Manager's
+**Collections** section. The Home Assistant forms are gone, and so is the
+`/api/cinema_collections/order` bridge the playback-order editor used.
+
 ## Observation mode
 
 Start with a new Worker namespace and separate source/compiled directories. Configure the integration, create equivalent collections and profiles, scan and compile copies of a small representative library, and add the dashboard cards. Leave all existing helpers and automations untouched.
