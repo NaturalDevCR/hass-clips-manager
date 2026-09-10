@@ -4,7 +4,7 @@ import { deterministicClipCompare, moveId } from "@/composables/useOrder";
 import { formatDuration, sourceName } from "@/lib/format";
 import type { Clip } from "@/types";
 
-const props = defineProps<{ clips: Clip[]; modelValue: string[] }>();
+const props = defineProps<{ clips: Clip[]; modelValue: string[]; readonly?: boolean }>();
 const emit = defineEmits<{ "update:modelValue": [string[]] }>();
 
 const list = ref<HTMLUListElement | null>(null);
@@ -20,6 +20,7 @@ const rows = computed(() =>
 );
 
 function reorder(from: number, to: number, focus = false): void {
+  if (props.readonly) return;
   if (to < 0 || to >= props.modelValue.length || from === to) return;
   emit("update:modelValue", moveId(props.modelValue, from, to));
   if (!focus) return;
@@ -64,19 +65,26 @@ function fill(): void {
 <template>
   <div class="flex flex-col gap-2">
     <p class="text-xs text-muted">
-      Drag a clip, or focus its handle and use the arrow keys, to arrange the order.
+      <template v-if="readonly">
+        Sequential playback follows the compiled path, so this order is calculated rather than
+        arranged. Switch to Custom to decide it yourself.
+      </template>
+      <template v-else>
+        Drag a clip, or focus its handle and use the arrow keys, to arrange the order.
+      </template>
     </p>
     <ul ref="list" aria-label="Playback order" class="flex flex-col gap-1">
       <li
         v-for="(row, index) in rows"
         :key="row.id"
-        draggable="true"
+        :draggable="!readonly"
         class="flex items-center gap-3 rounded-lg border border-line bg-ground px-3 py-2 text-sm"
         @dragstart="$event.dataTransfer?.setData('text/plain', row.id)"
         @dragover.prevent
         @drop="onDrop($event, row.id)"
       >
         <button
+          v-if="!readonly"
           type="button"
           class="order-handle cursor-grab rounded px-1 text-muted hover:text-ink"
           :aria-label="`Reorder ${row.clip ? sourceName(row.clip) : row.id}`"
@@ -98,9 +106,13 @@ function fill(): void {
       </li>
     </ul>
     <p v-if="!rows.length" class="text-sm text-muted">
-      No clips in this order yet. Add the catalogued clips to start from the path order.
+      {{
+        readonly
+          ? "No catalogued clips in this collection yet."
+          : "No clips in this order yet. Add the catalogued clips to start from the path order."
+      }}
     </p>
-    <div class="flex flex-wrap gap-2">
+    <div v-if="!readonly" class="flex flex-wrap gap-2">
       <button type="button" class="btn" @click="fill">Add catalogued clips</button>
       <button type="button" class="btn" @click="reset">Reset to path order</button>
     </div>
