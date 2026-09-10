@@ -14,7 +14,11 @@ CONF_OVERRIDE_MODE = "override_mode"
 CONF_OVERRIDE_COLLECTION_ID = "override_collection_id"
 CONF_HISTORY_RESET_TIME = "history_reset_time"
 CONF_HISTORY_RESET_MODE = "history_reset_mode"
-CONF_SYNC_ON_STARTUP = "sync_on_startup"
+# Set once this entry's collections and profiles live in the Worker.
+CONF_MIGRATED_TO_WORKER = "migrated_to_worker"
+# The first Worker that owns collections and processing profiles. An older
+# Worker rejects the policy fields outright rather than dropping them.
+MINIMUM_WORKER_VERSION = "1.8.0"
 CONF_SCHEDULE_RUN_TOKENS = "schedule_run_tokens"
 
 
@@ -49,7 +53,6 @@ def normalize_clip_order(value: object) -> tuple[str, ...]:
 DEFAULT_MEDIA_URI_PREFIX = "media-source://media_source/local/cinema-collections/compiled"
 DEFAULT_HISTORY_RESET_TIME = "00:00"
 DEFAULT_HISTORY_RESET_MODE = HistoryResetMode.ON_EXHAUSTION.value
-DEFAULT_SYNC_ON_STARTUP = True
 MAX_SCHEDULE_RUN_TOKENS = 512
 
 SUBENTRY_COLLECTION = "collection"

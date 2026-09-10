@@ -5,11 +5,15 @@ import { createRouter, createWebHashHistory } from "vue-router";
 export const router = createRouter({
   history: createWebHashHistory(),
   routes: [
-    { path: "/", redirect: "/library" },
+    { path: "/", redirect: "/collections" },
+    {
+      path: "/collections",
+      name: "collections",
+      component: () => import("@/views/CollectionsView.vue"),
+    },
     { path: "/library", name: "library", component: () => import("@/views/LibraryView.vue") },
-    { path: "/order", name: "order", component: () => import("@/views/OrderView.vue") },
     { path: "/import", name: "import", component: () => import("@/views/ImportView.vue") },
     { path: "/system", name: "system", component: () => import("@/views/SystemView.vue") },
-    { path: "/:pathMatch(.*)*", redirect: "/library" },
+    { path: "/:pathMatch(.*)*", redirect: "/collections" },
   ],
 });

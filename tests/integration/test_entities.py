@@ -160,7 +160,7 @@ async def test_select_option_persists_explicit_override_mode(monkeypatch) -> Non
 
     entry = SimpleNamespace(options={})
     hass = SimpleNamespace(config_entries=ConfigEntries())
-    monkeypatch.setattr(services, "policies_for_entry", lambda _entry: (CollectionPolicy("films"),))
+    monkeypatch.setattr(services, "_policies", lambda _coordinator: (CollectionPolicy("films"),))
 
     await services.async_set_collection_override(
         hass, entry, {"option": "films"}, coordinator=Coordinator()
@@ -292,3 +292,94 @@ async def test_active_collection_sensor_history_is_empty_when_store_is_unset(has
 
     assert coordinator.data.history == {}
     assert sensor.extra_state_attributes["history"] == {}
+
+
+def test_coordinator_reads_collection_policy_from_the_worker() -> None:
+    from custom_components.cinema_collections.coordinator import policies_from_collections
+    from custom_components.cinema_collections.models import WorkerCollection
+
+    records = (
+        WorkerCollection.from_dict(
+            {
+                "id": "films",
+                "name": "Films",
+                "source_directory": "films",
+                "processing_profile_id": "default",
+                "tags": [],
+                "notes": None,
+                "revision": 1,
+                "enabled": True,
+                "priority": 7,
+                "is_default": True,
+                "allow_manual_override": False,
+                "starts_at": "2026-01-01T00:00:00+00:00",
+                "ends_at": None,
+                "schedule": {"enabled": True, "local_time": "02:30", "weekdays": [0, 1]},
+                "playback_mode": "custom",
+                "ordered_clip_ids": ["11111111-1111-1111-1111-111111111111"],
+            }
+        ),
+    )
+
+    policies = policies_from_collections(records)
+
+    assert len(policies) == 1
+    assert policies[0].priority == 7
+    assert policies[0].is_default is True
+    assert policies[0].allow_manual_override is False
+    assert policies[0].playback_mode == "custom"
+    assert policies[0].ordered_clip_ids == ("11111111-1111-1111-1111-111111111111",)
+    assert policies[0].starts_at is not None
+    assert policies[0].starts_at.tzinfo is not None
+
+
+def test_coordinator_skips_a_collection_whose_policy_cannot_be_used() -> None:
+    from custom_components.cinema_collections.coordinator import policies_from_collections
+    from custom_components.cinema_collections.models import WorkerCollection
+
+    # Custom playback with no order is invalid policy; one bad collection must
+    # not hide the rest of the library.
+    records = (
+        WorkerCollection.from_dict(
+            {
+                "id": "broken",
+                "name": "Broken",
+                "source_directory": "broken",
+                "processing_profile_id": "default",
+                "tags": [],
+                "notes": None,
+                "revision": 1,
+                "enabled": True,
+                "priority": 0,
+                "is_default": False,
+                "allow_manual_override": True,
+                "starts_at": None,
+                "ends_at": None,
+                "schedule": {},
+                "playback_mode": "custom",
+                "ordered_clip_ids": [],
+            }
+        ),
+        WorkerCollection.from_dict(
+            {
+                "id": "films",
+                "name": "Films",
+                "source_directory": "films",
+                "processing_profile_id": "default",
+                "tags": [],
+                "notes": None,
+                "revision": 1,
+                "enabled": True,
+                "priority": 0,
+                "is_default": False,
+                "allow_manual_override": True,
+                "starts_at": None,
+                "ends_at": None,
+                "schedule": {},
+                "playback_mode": "random",
+                "ordered_clip_ids": [],
+            }
+        ),
+    )
+
+    assert [policy.id for policy in policies_from_collections(records)] == ["films"]

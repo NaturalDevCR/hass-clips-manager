@@ -117,14 +117,14 @@ App starts. It is a complete, editable baseline (3840x2160 at 24 fps, AAC audio,
 two-pass loudness normalization).
 
 You only need to create a new profile to change those settings. To do so, open
-the integration entry in **Settings → Devices & services**, and add a
-**Processing profile** config subentry. The editor is a field-by-field form,
-not a JSON textarea. See [processing-profiles.md](processing-profiles.md) for
+the Library Manager's **Collections** section and choose **New profile**. The
+editor is a field-by-field form, not a JSON textarea, and a new profile starts
+from an existing one. See [processing-profiles.md](processing-profiles.md) for
 the field reference.
 
 ## 8. Create a collection
 
-Add a **Collection** config subentry from the same integration entry page.
+Choose **New collection** in the Library Manager's **Collections** section.
 
 Two fields cause most setup mistakes, so read them together:
 
@@ -228,7 +228,7 @@ Your existing playback automation remains the device-control layer.
 - [installation.md](installation.md) — install options for supervised and
   external Docker deployments.
 - [configuration.md](configuration.md) — Worker options, pairing, global
-  options, and the collection and profile subentry forms.
+  options, and the collection and profile editors.
 - [processing-profiles.md](processing-profiles.md) — the complete profile field
   reference.
 - [dashboard.md](dashboard.md) — sensors, buttons, and the automation pattern.

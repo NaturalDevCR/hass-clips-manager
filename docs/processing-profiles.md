@@ -15,11 +15,11 @@ reconfigured in place.
 
 ## Editing profiles
 
-Profiles are edited through the integration, not the Worker API. Open the
-integration entry in **Settings → Devices & services** and add or reconfigure a
-**Processing profile** config subentry. The editor is a field-by-field form;
-every field below maps to one form control. Saving synchronizes the profile to
-the Worker and reports the Worker's validation errors back in the form.
+Profiles are edited in the Library Manager's **Collections** section, not
+through the Worker API and no longer in Home Assistant. The editor is a
+field-by-field form; every field below maps to one form control, grouped the way
+the profile is actually structured. Saving reports the Worker's validation
+errors back in the form.
 
 You only need a second profile when a collection must compile differently from
 the baseline.

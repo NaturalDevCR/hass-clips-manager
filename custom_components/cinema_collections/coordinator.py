@@ -16,17 +16,17 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
 
 from .api_client import WorkerApiError
-from .const import CONF_OVERRIDE_COLLECTION_ID, CONF_OVERRIDE_MODE, DOMAIN
+from .const import CONF_OVERRIDE_COLLECTION_ID, CONF_OVERRIDE_MODE, DOMAIN, PlaybackMode
 from .history import PlaybackHistoryStore
-from .models import WorkerClip, WorkerHealth, WorkerStatus
+from .models import WorkerClip, WorkerCollection, WorkerHealth, WorkerStatus
 from .resolver import (
     CollectionPolicy,
     OverrideKind,
     OverrideMode,
+    SelectionResult,
     resolve_active_collection,
 )
-from .scheduler import CompilationSchedule
-from .subentries import collection_subentries
+from .scheduler import CompilationSchedule, schedules_from_mapping
 
 _LOGGER = logging.getLogger(__name__)
 _BASE_UPDATE_INTERVAL = timedelta(seconds=30)
@@ -119,7 +119,7 @@ class CinemaCollectionsCoordinator(DataUpdateCoordinator[CoordinatorSnapshot]):
         hass: HomeAssistant,
         client: CoordinatorWorker,
         *,
-        collections: Callable[[], Sequence[CollectionPolicy]],
+        collections: Callable[[], Sequence[CollectionPolicy]] | None = None,
         override: Callable[[], OverrideMode],
         schedules: Callable[[], Sequence[CompilationSchedule]] | None = None,
         history: Callable[[], PlaybackHistoryStore | None] | None = None,
@@ -136,8 +136,13 @@ class CinemaCollectionsCoordinator(DataUpdateCoordinator[CoordinatorSnapshot]):
         )
         self.client = client
         self._collections = collections
+        # Policy fetched from the Worker, retained in memory across a
+        # disconnect so a dropped poll does not reshuffle selection. It is
+        # never written to the config entry: the Worker owns it.
+        self.policies: tuple[CollectionPolicy, ...] = ()
+        self.worker_collections: tuple[WorkerCollection, ...] = ()
         self._override = override
-        self._schedules = schedules or (lambda: ())
+        self._schedules_source = schedules
         self._history = history
         self._now = now or (lambda: datetime.now(UTC))
         self._failure_count = 0
@@ -145,22 +150,20 @@ class CinemaCollectionsCoordinator(DataUpdateCoordinator[CoordinatorSnapshot]):
     async def async_update_data(self) -> CoordinatorSnapshot:
         """Read Worker state with bounded backoff, without losing local resolution."""
         now = self._now()
-        policies = tuple(self._collections())
-        selection = resolve_active_collection(policies, self._override(), now)
-        priorities = MappingProxyType({item.id: item.priority for item in policies})
-        next_schedule = _next_schedule(tuple(self._schedules()), now)
         history_snapshot = _history_snapshot(self._history)
         try:
-            health, status, clips = await asyncio.gather(
+            health, status, clips, collections = await asyncio.gather(
                 self.client.async_health(),
                 self.client.async_status(),
                 _clips_request(self.client),
+                _collections_request(self.client),
             )
         except WorkerApiError as error:
             self._failure_count += 1
             self.update_interval = min(
                 _BASE_UPDATE_INTERVAL * (2**self._failure_count), _MAX_UPDATE_INTERVAL
             )
+            selection = self._resolve(now)
             return CoordinatorSnapshot(
                 active_collection_id=selection.id,
                 reason=selection.reason.value,
@@ -169,11 +172,15 @@ class CinemaCollectionsCoordinator(DataUpdateCoordinator[CoordinatorSnapshot]):
                 health=None,
                 available=False,
                 error=str(error),
-                next_schedule=next_schedule,
-                priorities=priorities,
+                next_schedule=_next_schedule(self.schedules(), now),
+                priorities=self._priorities(),
                 history=history_snapshot,
             )
 
+        if collections:
+            self.worker_collections = tuple(collections)
+            self.policies = policies_from_collections(self.worker_collections)
+        selection = self._resolve(now)
         self._failure_count = 0
         self.update_interval = _BASE_UPDATE_INTERVAL
         return CoordinatorSnapshot(
@@ -184,10 +191,34 @@ class CinemaCollectionsCoordinator(DataUpdateCoordinator[CoordinatorSnapshot]):
             health=health,
             available=True,
             error=None,
-            next_schedule=next_schedule,
-            priorities=priorities,
+            next_schedule=_next_schedule(self.schedules(), now),
+            priorities=self._priorities(),
             clip_states=_clip_state_counts(clips),
             history=history_snapshot,
+        )
+
+    def _resolve(self, now: datetime) -> SelectionResult:
+        return resolve_active_collection(self.current_policies(), self._override(), now)
+
+    def _priorities(self) -> Mapping[str, int]:
+        return MappingProxyType({item.id: item.priority for item in self.current_policies()})
+
+    def current_policies(self) -> tuple[CollectionPolicy, ...]:
+        """Policy from the Worker, or from the caller-supplied source in tests."""
+        if self._collections is not None:
+            return tuple(self._collections())
+        return self.policies
+
+    def schedules(self) -> tuple[CompilationSchedule, ...]:
+        """Compilation schedules the Worker stores, dispatched by Home Assistant."""
+        if self._schedules_source is not None:
+            return tuple(self._schedules_source())
+        return tuple(
+            schedule
+            for record in self.worker_collections
+            for schedule in schedules_from_mapping(
+                {"collection_id": record.id, "schedule": dict(record.schedule)}
+            )
         )
 
 
@@ -237,11 +268,47 @@ def _next_schedule(schedules: Sequence[CompilationSchedule], now: datetime) -> d
     return min(candidates, default=None)
 
 
-def policies_for_entry(entry: ConfigEntry) -> tuple[CollectionPolicy, ...]:
-    """Read immutable local policies from this entry's collection subentries."""
-    if not hasattr(entry, "subentries"):
-        return ()
-    return tuple(collection.to_policy() for collection in collection_subentries(entry))
+def policies_from_collections(
+    records: Sequence[WorkerCollection],
+) -> tuple[CollectionPolicy, ...]:
+    """Turn Worker collections into the policy the resolver and scheduler read."""
+    policies: list[CollectionPolicy] = []
+    for record in records:
+        try:
+            policies.append(
+                CollectionPolicy(
+                    id=record.id,
+                    enabled=record.enabled,
+                    priority=record.priority,
+                    starts_at=_policy_datetime(record.starts_at),
+                    ends_at=_policy_datetime(record.ends_at),
+                    is_default=record.is_default,
+                    allow_manual_override=record.allow_manual_override,
+                    playback_mode=PlaybackMode(record.playback_mode),
+                    ordered_clip_ids=record.ordered_clip_ids,
+                )
+            )
+        except ValueError:
+            # One unusable collection must not blind the integration to the rest.
+            _LOGGER.warning(
+                "Cinema Collections ignored collection %s with invalid policy", record.id
+            )
+    return tuple(policies)
+
+
+def _policy_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    parsed = datetime.fromisoformat(value)
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+
+
+async def _collections_request(client: CoordinatorWorker) -> Sequence[WorkerCollection]:
+    """Return Worker collections when the client supports listing them."""
+    method = getattr(client, "async_list_collections", None)
+    if callable(method):
+        return await cast("Callable[[], Awaitable[Sequence[WorkerCollection]]]", method)()
+    return ()
 
 
 def override_for_entry(entry: ConfigEntry) -> OverrideMode:

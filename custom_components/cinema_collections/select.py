@@ -11,7 +11,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
-from .coordinator import CinemaCollectionsCoordinator, override_for_entry, policies_for_entry
+from .coordinator import CinemaCollectionsCoordinator, override_for_entry
 from .resolver import OverrideKind
 from .services import async_set_collection_override
 
@@ -65,7 +65,7 @@ class CinemaCollectionsSelect(SelectEntity):
             OverrideKind.DEFAULT.value,
             *(
                 policy.id
-                for policy in policies_for_entry(self._entry)
+                for policy in self._coordinator.current_policies()
                 if policy.enabled and policy.allow_manual_override
             ),
         ]

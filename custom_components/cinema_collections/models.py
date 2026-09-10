@@ -204,3 +204,82 @@ class WorkerStatus:
             scans=MappingProxyType(dict(scans)),
             latest_errors=errors,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class WorkerCollection:
+    """A Worker collection and the policy the integration selects and schedules on."""
+
+    id: str
+    name: str
+    source_directory: str
+    processing_profile_id: str
+    enabled: bool
+    priority: int
+    is_default: bool
+    allow_manual_override: bool
+    tags: tuple[str, ...]
+    notes: str | None
+    starts_at: str | None
+    ends_at: str | None
+    schedule: Mapping[str, Any]
+    playback_mode: str
+    ordered_clip_ids: tuple[str, ...]
+    revision: int
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> WorkerCollection:
+        """Parse the collection policy the Worker now owns."""
+        for name in ("enabled", "is_default", "allow_manual_override"):
+            if not isinstance(payload.get(name), bool):
+                raise WorkerContractError(f"Worker response field {name!r} must be boolean")
+        priority = payload.get("priority")
+        if isinstance(priority, bool) or not isinstance(priority, int):
+            raise WorkerContractError("Worker response field 'priority' must be an integer")
+        revision = payload.get("revision")
+        if isinstance(revision, bool) or not isinstance(revision, int) or revision < 1:
+            raise WorkerContractError("Worker response field 'revision' must be a positive integer")
+        for name in ("starts_at", "ends_at"):
+            value = payload.get(name)
+            if value is not None and not isinstance(value, str):
+                raise WorkerContractError(
+                    f"Worker response field {name!r} must be a string or null"
+                )
+        raw_order = payload.get("ordered_clip_ids", [])
+        if not isinstance(raw_order, list):
+            raise WorkerContractError("Worker response field 'ordered_clip_ids' must be an array")
+        order = cast(list[object], raw_order)
+        if not all(isinstance(entry, str) and entry for entry in order):
+            raise WorkerContractError(
+                "Worker response field 'ordered_clip_ids' must hold non-empty strings"
+            )
+        playback_mode = payload.get("playback_mode", "random")
+        if not isinstance(playback_mode, str):
+            raise WorkerContractError("Worker response field 'playback_mode' must be a string")
+        raw_tags = payload.get("tags", [])
+        if not isinstance(raw_tags, list):
+            raise WorkerContractError("Worker response field 'tags' must be an array")
+        tags = cast(list[object], raw_tags)
+        notes = payload.get("notes")
+        if notes is not None and not isinstance(notes, str):
+            raise WorkerContractError("Worker response field 'notes' must be a string or null")
+        return cls(
+            id=_required_string(payload, "id"),
+            name=_required_string(payload, "name"),
+            source_directory=_required_string(payload, "source_directory"),
+            processing_profile_id=_required_string(payload, "processing_profile_id"),
+            enabled=bool(payload["enabled"]),
+            priority=priority,
+            is_default=bool(payload["is_default"]),
+            allow_manual_override=bool(payload["allow_manual_override"]),
+            tags=tuple(str(tag) for tag in tags),
+            notes=notes,
+            starts_at=cast(str | None, payload.get("starts_at")),
+            ends_at=cast(str | None, payload.get("ends_at")),
+            schedule=MappingProxyType(
+                dict(_required_mapping(payload.get("schedule", {}), "schedule"))
+            ),
+            playback_mode=playback_mode,
+            ordered_clip_ids=tuple(cast(list[str], order)),
+            revision=revision,
+        )
