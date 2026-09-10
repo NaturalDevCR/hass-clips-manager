@@ -25,6 +25,10 @@ export interface Job {
   created_at: string | null;
   finished_at: string | null;
   error: string | null;
+  /** The clip a compile job acts on; null for jobs that act on no single clip. */
+  clip_id?: string | null;
+  /** What the job acts on: a clip's source path, or a scan's collections. */
+  target?: string;
   progress?: JobProgress;
 }
 

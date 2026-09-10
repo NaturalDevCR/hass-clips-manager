@@ -1,4 +1,4 @@
-import type { Clip } from "@/types";
+import type { Clip, Job } from "@/types";
 
 export function formatDuration(seconds: number): string {
   if (!seconds || seconds <= 0) return "—";
@@ -29,4 +29,16 @@ export async function copyText(text: string): Promise<void> {
   } finally {
     area.remove();
   }
+}
+
+/**
+ * Label what a job acts on. A compile job's target is a source path, so only its
+ * filename is shown; a scan reports its collections, and an empty target means
+ * it covered the whole library.
+ */
+export function jobTarget(job: Job): string {
+  const target = job.target ?? "";
+  if (!target) return job.kind === "scan" ? "every collection" : "";
+  if (job.kind === "compile") return target.split("/").pop() || target;
+  return target;
 }

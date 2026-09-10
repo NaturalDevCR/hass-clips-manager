@@ -270,7 +270,16 @@ def test_manager_jobs_route_lists_recent_jobs_and_single_job_route_still_works(
     assert jobs.status_code == 200
     assert jobs.json()[0]["id"] == job_id
     assert jobs.json()[0]["kind"] == "scan"
-    assert set(jobs.json()[0]) == {"id", "kind", "state", "created_at", "finished_at", "error"}
+    assert set(jobs.json()[0]) == {
+        "id",
+        "kind",
+        "state",
+        "created_at",
+        "finished_at",
+        "error",
+        "clip_id",
+        "target",
+    }
 
     single = client.get(f"/manager/jobs/{job_id}")
 
@@ -660,3 +669,51 @@ def test_manager_page_reports_an_unbuilt_interface(tmp_path: Path, manager_ui_sh
 
     assert response.status_code == 503
     assert "npm --prefix ui" in response.json()["message"]
+
+
+def test_manager_jobs_report_what_each_job_acts_on(tmp_path: Path) -> None:
+    client = TestClient(_app(tmp_path))
+    _seed_collection(client)
+    csrf = _manager_session(client)
+    assert (
+        client.post("/manager/scan?collection_id=films", headers={"X-CSRF-Token": csrf}).status_code
+        == 202
+    )
+    # A compile job is seeded directly: the route reports what the jobs table
+    # holds, and driving a real compilation would need a catalogued clip and
+    # FFmpeg without testing anything more about this route.
+    with client.app.state.database.connection:
+        client.app.state.database.connection.execute(
+            "INSERT INTO jobs(id,kind,state,progress,created_at,collection_id,clip_id,payload) "
+            "VALUES(?,?,?,?,?,?,?,?)",
+            (
+                "33333333-3333-3333-3333-333333333333",
+                "compile",
+                "succeeded",
+                "{}",
+                "2026-01-01T00:00:00+00:00",
+                "films",
+                "44444444-4444-4444-4444-444444444444",
+                '{"source_relative_path": "films/feature.mp4"}',
+            ),
+        )
+
+    jobs = client.get("/manager/jobs").json()
+
+    compile_job = next(job for job in jobs if job["kind"] == "compile")
+    assert compile_job["target"] == "films/feature.mp4"
+    assert compile_job["clip_id"] == "44444444-4444-4444-4444-444444444444"
+    scan_job = next(job for job in jobs if job["kind"] == "scan")
+    assert scan_job["target"] == "films"
+    assert scan_job["clip_id"] is None
+
+
+def test_manager_jobs_report_a_library_wide_scan_with_no_target(tmp_path: Path) -> None:
+    client = TestClient(_app(tmp_path))
+    _seed_collection(client)
+    csrf = _manager_session(client)
+    assert client.post("/manager/scan", headers={"X-CSRF-Token": csrf}).status_code == 202
+
+    scan_job = next(job for job in client.get("/manager/jobs").json() if job["kind"] == "scan")
+
+    assert scan_job["target"] == ""

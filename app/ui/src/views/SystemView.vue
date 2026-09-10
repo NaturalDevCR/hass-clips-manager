@@ -4,6 +4,7 @@ import { apiFetch } from "@/composables/useApi";
 import { useClips } from "@/composables/useClips";
 import { useJobs } from "@/composables/useJobs";
 import { useSession } from "@/composables/useSession";
+import { jobTarget } from "@/lib/format";
 import { COLLECTION_ID_HINT, COLLECTION_ID_PATTERN } from "@/composables/useUpload";
 import type { LogEntry, TrashEntry } from "@/types";
 
@@ -149,7 +150,7 @@ async function restore(entry: TrashEntry): Promise<void> {
         <table class="w-full min-w-[42rem] border-collapse text-sm">
           <thead class="text-left text-xs tracking-wide text-muted uppercase">
             <tr>
-              <th class="py-2 pr-3">Job</th>
+              <th class="py-2 pr-3">Target</th>
               <th class="py-2 pr-3">Kind</th>
               <th class="py-2 pr-3">State</th>
               <th class="py-2 pr-3">Created</th>
@@ -164,7 +165,9 @@ async function restore(entry: TrashEntry): Promise<void> {
               class="border-t border-line"
               :class="job.state === 'failed' && 'text-danger'"
             >
-              <td class="max-w-40 truncate py-2 pr-3"><code class="text-xs">{{ job.id }}</code></td>
+              <td class="max-w-64 truncate py-2 pr-3" :title="job.target || job.id">
+                {{ jobTarget(job) || "—" }}
+              </td>
               <td class="py-2 pr-3">{{ job.kind }}</td>
               <td class="py-2 pr-3">{{ job.state }}</td>
               <td class="py-2 pr-3 text-xs text-muted">{{ job.created_at || "—" }}</td>

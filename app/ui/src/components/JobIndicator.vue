@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref } from "vue";
 import { useJobs } from "@/composables/useJobs";
+import { jobTarget } from "@/lib/format";
 
 const { jobs, active } = useJobs();
 const open = ref(false);
@@ -30,9 +31,12 @@ const open = ref(false);
       <ul v-else class="max-h-80 space-y-1 overflow-y-auto">
         <li v-for="job in jobs.slice(0, 12)" :key="job.id" class="rounded px-2 py-1.5 text-sm">
           <div class="flex items-baseline justify-between gap-2">
-            <span class="truncate text-ink">{{ job.kind }}</span>
+            <span class="min-w-0 flex-1 truncate text-ink" :title="job.target || job.kind">
+              {{ jobTarget(job) || job.kind }}
+            </span>
             <span class="shrink-0 text-xs text-muted">{{ job.state }}</span>
           </div>
+          <p class="text-xs text-muted">{{ job.kind }}</p>
           <p v-if="job.error" class="text-xs text-danger">{{ job.error }}</p>
         </li>
       </ul>
