@@ -14,6 +14,7 @@ from .domain import (
     CollectionCreate,
     CollectionPatch,
     CollectionRecord,
+    PlaybackMode,
     ProfileCreate,
     ProfilePatch,
     ProfileRecord,
@@ -200,7 +201,10 @@ class CollectionRepository(_Repository):
                 if payload.is_default:
                     self._demote_other_defaults(payload.id, actor=actor, request_id=request_id)
                 self.db.connection.execute(
-                    "INSERT INTO collections(id,name,enabled,source_directory,compiled_output_prefix,processing_profile_id,is_default,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
+                    "INSERT INTO collections(id,name,enabled,source_directory,compiled_output_prefix,"
+                    "processing_profile_id,is_default,starts_at,ends_at,schedule,playback_mode,"
+                    "ordered_clip_ids,created_at,updated_at) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (
                         payload.id,
                         payload.name,
@@ -209,6 +213,11 @@ class CollectionRepository(_Repository):
                         payload.id,
                         payload.processing_profile_id,
                         int(payload.is_default),
+                        payload.starts_at,
+                        payload.ends_at,
+                        _json(payload.schedule),
+                        str(payload.playback_mode),
+                        _json(payload.ordered_clip_ids),
                         now,
                         now,
                     ),
@@ -253,6 +262,11 @@ class CollectionRepository(_Repository):
             allow_manual_override=bool(row["allow_manual_override"]),
             tags=json.loads(row["tags"]),
             notes=row["notes"],
+            starts_at=row["starts_at"],
+            ends_at=row["ends_at"],
+            schedule=json.loads(row["schedule"] or "{}"),
+            playback_mode=PlaybackMode(str(row["playback_mode"])),
+            ordered_clip_ids=json.loads(row["ordered_clip_ids"] or "[]"),
             revision=row["revision"],
         )
 
@@ -288,14 +302,23 @@ class CollectionRepository(_Repository):
             "allow_manual_override": "allow_manual_override",
             "tags": "tags",
             "notes": "notes",
+            "starts_at": "starts_at",
+            "ends_at": "ends_at",
+            "schedule": "schedule",
+            "playback_mode": "playback_mode",
+            "ordered_clip_ids": "ordered_clip_ids",
         }
+        json_columns = {"tags", "schedule", "ordered_clip_ids"}
         assignments: list[str] = []
         args: list[Any] = []
         for key, value in values.items():
             assignments.append(f"{columns[key]}=?")
-            args.append(
-                _json(value) if key == "tags" else int(value) if isinstance(value, bool) else value
-            )
+            if key in json_columns:
+                args.append(_json(value))
+            elif key == "playback_mode":
+                args.append(str(value))
+            else:
+                args.append(int(value) if isinstance(value, bool) else value)
         args.extend([_now(), id, revision])
         with self.db.transaction():
             if values.get("is_default") is True:

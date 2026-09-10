@@ -278,6 +278,21 @@ class Database:
             """)
             self.connection.execute("INSERT INTO schema_migrations VALUES (7, datetime('now'))")
             self.connection.commit()
+        if not self.connection.execute(
+            "SELECT 1 FROM schema_migrations WHERE version=8"
+        ).fetchone():
+            # Collection policy that used to live in the Home Assistant config
+            # entry. The Worker executes this configuration, so it owns it; the
+            # integration reads it back rather than storing its own copy.
+            self.connection.executescript("""
+                ALTER TABLE collections ADD COLUMN starts_at TEXT;
+                ALTER TABLE collections ADD COLUMN ends_at TEXT;
+                ALTER TABLE collections ADD COLUMN schedule TEXT NOT NULL DEFAULT '{}';
+                ALTER TABLE collections ADD COLUMN playback_mode TEXT NOT NULL DEFAULT 'random';
+                ALTER TABLE collections ADD COLUMN ordered_clip_ids TEXT NOT NULL DEFAULT '[]';
+            """)
+            self.connection.execute("INSERT INTO schema_migrations VALUES (8, datetime('now'))")
+            self.connection.commit()
 
     def close(self) -> None:
         with self._connections_lock:

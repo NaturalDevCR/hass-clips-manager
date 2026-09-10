@@ -330,3 +330,55 @@ def test_list_assets_is_bearer_authenticated_and_returns_library_assets(tmp_path
     )
 
     assert client.get("/api/v1/assets", headers=_headers()).json() == ["intro.mp4"]
+
+
+def test_collection_round_trips_schedule_window_and_playback_order(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    _create_profile_and_collection(client)
+
+    patched = client.patch(
+        "/api/v1/collections/films",
+        headers={**_headers("policy-1"), "If-Match-Revision": "1"},
+        json={
+            "starts_at": "2026-01-01T00:00:00+00:00",
+            "ends_at": "2026-12-31T00:00:00+00:00",
+            "schedule": {"enabled": True, "local_time": "02:30"},
+            "playback_mode": "custom",
+            "ordered_clip_ids": ["11111111-1111-1111-1111-111111111111"],
+        },
+    )
+
+    assert patched.status_code == 200
+    listed = client.get("/api/v1/collections", headers=_headers("policy-2")).json()
+    record = listed["items"][0]
+    assert record["starts_at"] == "2026-01-01T00:00:00+00:00"
+    assert record["ends_at"] == "2026-12-31T00:00:00+00:00"
+    assert record["schedule"] == {"enabled": True, "local_time": "02:30"}
+    assert record["playback_mode"] == "custom"
+    assert record["ordered_clip_ids"] == ["11111111-1111-1111-1111-111111111111"]
+
+
+def test_new_collection_defaults_to_random_playback_with_no_window(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    _create_profile_and_collection(client)
+
+    listed = client.get("/api/v1/collections", headers=_headers("policy-3")).json()
+    record = listed["items"][0]
+
+    assert record["playback_mode"] == "random"
+    assert record["ordered_clip_ids"] == []
+    assert record["schedule"] == {}
+    assert record["starts_at"] is None
+
+
+def test_custom_playback_requires_an_order(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    _create_profile_and_collection(client)
+
+    rejected = client.patch(
+        "/api/v1/collections/films",
+        headers={**_headers("policy-4"), "If-Match-Revision": "1"},
+        json={"playback_mode": "custom", "ordered_clip_ids": []},
+    )
+
+    assert rejected.status_code == 422
