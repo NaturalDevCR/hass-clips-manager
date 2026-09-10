@@ -29,7 +29,6 @@ from .const import (
 from .models import WorkerHealth
 from .options_flow import CinemaCollectionsOptionsFlow
 from .selection import normalize_media_uri_prefix
-from .subentries import CollectionSubentryFlow, ProfileSubentryFlow
 
 
 class CinemaCollectionsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -43,16 +42,6 @@ class CinemaCollectionsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     ) -> config_entries.OptionsFlow:
         """Expose global collection policy in the native Options UI."""
         return CinemaCollectionsOptionsFlow()
-
-    @classmethod
-    def async_get_supported_subentry_types(
-        cls, config_entry: config_entries.ConfigEntry
-    ) -> dict[str, type[config_entries.ConfigSubentryFlow]]:
-        """Expose Worker-backed profile and collection configuration subentries."""
-        return {
-            "collection": CollectionSubentryFlow,
-            "profile": ProfileSubentryFlow,
-        }
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Validate the Worker endpoint, credential, and API compatibility."""

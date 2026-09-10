@@ -16,6 +16,9 @@ CONF_HISTORY_RESET_TIME = "history_reset_time"
 CONF_HISTORY_RESET_MODE = "history_reset_mode"
 # Set once this entry's collections and profiles live in the Worker.
 CONF_MIGRATED_TO_WORKER = "migrated_to_worker"
+# The first Worker that owns collections and processing profiles. An older
+# Worker rejects the policy fields outright rather than dropping them.
+MINIMUM_WORKER_VERSION = "1.8.0"
 CONF_SCHEDULE_RUN_TOKENS = "schedule_run_tokens"
 
 

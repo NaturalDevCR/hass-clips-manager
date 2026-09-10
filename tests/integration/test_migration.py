@@ -215,3 +215,20 @@ async def test_migration_marks_an_entry_that_never_had_subentries(hass: HomeAssi
 
     assert entry.data[CONF_MIGRATED_TO_WORKER] is True
     assert client.calls == []
+
+
+def test_setup_refuses_a_worker_that_cannot_own_the_configuration() -> None:
+    from types import SimpleNamespace
+
+    import pytest as _pytest
+    from homeassistant.exceptions import ConfigEntryNotReady
+
+    from custom_components.cinema_collections import _require_supported_worker
+    from custom_components.cinema_collections.const import MINIMUM_WORKER_VERSION
+
+    old = SimpleNamespace(data=SimpleNamespace(health=SimpleNamespace(worker_version="1.7.2")))
+    with _pytest.raises(ConfigEntryNotReady, match=MINIMUM_WORKER_VERSION):
+        _require_supported_worker(old)  # type: ignore[arg-type]
+
+    current = SimpleNamespace(data=SimpleNamespace(health=SimpleNamespace(worker_version="1.8.0")))
+    _require_supported_worker(current)  # type: ignore[arg-type]

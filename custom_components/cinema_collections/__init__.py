@@ -9,6 +9,7 @@ from datetime import datetime, time
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import async_track_time_change
 
@@ -21,32 +22,21 @@ from .const import (
     DEFAULT_HISTORY_RESET_MODE,
     DEFAULT_HISTORY_RESET_TIME,
     DOMAIN,
+    MINIMUM_WORKER_VERSION,
     PLATFORMS,
     HistoryResetMode,
 )
 from .coordinator import CinemaCollectionsCoordinator, override_for_entry
 from .history import PlaybackHistoryStore
 from .migration import async_migrate_subentries
-from .order_view import CinemaCollectionsOrderView
 from .scheduler import CompilationScheduler, ConfigEntryRunTokenStore
 from .services import async_register_services
-from .subentries import (
-    SUBENTRY_COLLECTION,
-    SUBENTRY_PROFILE,
-    CollectionSubentryData,
-    ProfileSubentryData,
-    WorkerValidationError,
-    async_sync_collection,
-    async_sync_profile,
-    collection_subentries,
-)
 
 _LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup(hass: HomeAssistant, _config: dict[str, object]) -> bool:
     """Register the authenticated visual playback-order bridge once."""
-    hass.http.register_view(CinemaCollectionsOrderView())
     return True
 
 
@@ -76,11 +66,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if getattr(hass, "bus", None) is not None:
         scheduler = CompilationScheduler(
             client,
-            lambda: tuple(
-                schedule
-                for collection in collection_subentries(entry)
-                for schedule in collection.schedules()
-            ),
+            lambda: coordinator.schedules(),
             ConfigEntryRunTokenStore(hass, entry),
         )
 
@@ -126,6 +112,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # for local policy/history and a later automatic refresh can reconnect.
     if hasattr(entry, "async_on_unload"):
         await coordinator.async_config_entry_first_refresh()
+        _require_supported_worker(coordinator)
     else:
         await coordinator.async_refresh()
     # Configuration moves into the Worker once, before the platforms come up,
@@ -163,30 +150,28 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return unload_ok
 
 
-async def _async_sync_subentries_on_startup(
-    hass: HomeAssistant, entry: ConfigEntry, client: WorkerApiClient
-) -> None:
-    """Reconcile persisted subentries with Worker revisions using their stable keys."""
-    for subentry in tuple(entry.subentries.values()):
-        try:
-            if subentry.subentry_type == SUBENTRY_COLLECTION:
-                collection = CollectionSubentryData.from_dict(subentry.data)
-                synchronized = await async_sync_collection(client, collection)
-                if synchronized.worker_revision != collection.worker_revision:
-                    hass.config_entries.async_update_subentry(
-                        entry, subentry, data=synchronized.as_dict(), title=synchronized.name
-                    )
-            elif subentry.subentry_type == SUBENTRY_PROFILE:
-                profile = ProfileSubentryData.from_dict(subentry.data)
-                synchronized = await async_sync_profile(client, profile)
-                if synchronized.worker_revision != profile.worker_revision:
-                    hass.config_entries.async_update_subentry(
-                        entry, subentry, data=synchronized.as_dict(), title=synchronized.name
-                    )
-        except (WorkerApiError, WorkerValidationError, KeyError, TypeError, ValueError) as error:
-            _LOGGER.warning(
-                "Cinema Collections could not synchronize %s %s on startup: %s",
-                subentry.subentry_type,
-                subentry.unique_id,
-                error,
-            )
+def _version_tuple(value: str) -> tuple[int, ...]:
+    parts: list[int] = []
+    for chunk in value.split("."):
+        digits = "".join(character for character in chunk if character.isdigit())
+        parts.append(int(digits) if digits else 0)
+    return tuple(parts)
+
+
+def _require_supported_worker(coordinator: CinemaCollectionsCoordinator) -> None:
+    """Refuse setup against a Worker that cannot own this configuration.
+
+    An older Worker forbids unknown fields, so it would reject the collection
+    policy this integration sends rather than silently dropping it. Failing here
+    names the required version instead of surfacing a confusing rejection later.
+    """
+    snapshot = coordinator.data
+    health = getattr(snapshot, "health", None)
+    if health is None:
+        return
+    if _version_tuple(health.worker_version) < _version_tuple(MINIMUM_WORKER_VERSION):
+        raise ConfigEntryNotReady(
+            "Cinema Collections needs Cinema Collections Worker "
+            f"{MINIMUM_WORKER_VERSION} or newer; this one reports {health.worker_version}. "
+            "Update the App, then reload this entry."
+        )
