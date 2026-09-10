@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import yaml
+from cinema_collections_worker.api import WORKER_VERSION
 
 ROOT = Path(__file__).parents[2]
 APP = ROOT / "app"
@@ -48,3 +49,12 @@ def test_app_image_builds_the_library_manager_interface() -> None:
     ) in dockerfile
     assert (ROOT / "ui/package.json").is_file()
     assert (ROOT / "ui/src/main.ts").is_file()
+
+
+def test_app_version_matches_the_version_the_worker_reports() -> None:
+    # The App version and WORKER_VERSION are separate declarations of one fact.
+    # Nothing else compares them, so a bump that misses one would ship a Worker
+    # whose /api/v1/health disagrees with the App the Supervisor installed.
+    config = yaml.safe_load((APP / "config.yaml").read_text(encoding="utf-8"))
+
+    assert str(config["version"]) == WORKER_VERSION

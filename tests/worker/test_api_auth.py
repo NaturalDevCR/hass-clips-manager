@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from cinema_collections_worker.api import create_app
+from cinema_collections_worker.api import WORKER_VERSION, create_app
 from cinema_collections_worker.paths import RootKey
 from cinema_collections_worker.settings import WorkerSettings
 from fastapi.testclient import TestClient
@@ -50,7 +50,7 @@ def test_health_reports_compatible_worker_versions_and_request_id(tmp_path: Path
     assert response.json() == {
         "status": "ok",
         "component": "cinema-collections-worker",
-        "worker_version": "1.7.0",
+        "worker_version": WORKER_VERSION,
         "api_version": "1.0.0",
         "min_client_version": "1.0.0",
         "max_client_version": "1.x",
