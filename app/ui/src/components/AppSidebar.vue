@@ -1,7 +1,7 @@
 <script setup lang="ts">
 const sections = [
+  { name: "collections", label: "Collections", glyph: "◫" },
   { name: "library", label: "Library", glyph: "▤" },
-  { name: "order", label: "Playback order", glyph: "↕" },
   { name: "import", label: "Import", glyph: "↑" },
   { name: "system", label: "System", glyph: "⚙" },
 ];

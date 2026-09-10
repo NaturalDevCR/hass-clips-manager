@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { deterministicClipCompare, moveId, orderBridgeUrl } from "@/composables/useOrder";
+import { deterministicClipCompare, moveId } from "@/composables/useOrder";
 import type { Clip } from "@/types";
 
 function clip(id: string, rank: number, output: string): Clip {
@@ -43,13 +43,5 @@ describe("moveId", () => {
 
   it("moves an id up", () => {
     expect(moveId(["a", "b", "c"], 2, 0)).toEqual(["c", "a", "b"]);
-  });
-});
-
-describe("orderBridgeUrl", () => {
-  it("stays same-origin and absolute, outside the Ingress prefix", () => {
-    const url = orderBridgeUrl();
-    expect(url.origin).toBe(window.location.origin);
-    expect(url.pathname).toBe("/api/cinema_collections/order");
   });
 });
