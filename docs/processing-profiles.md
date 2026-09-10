@@ -18,8 +18,10 @@ reconfigured in place.
 Profiles are edited in the Library Manager's **Collections** section, not
 through the Worker API and no longer in Home Assistant. The editor is a
 field-by-field form; every field below maps to one form control, grouped the way
-the profile is actually structured. Saving reports the Worker's validation
-errors back in the form.
+the profile is actually structured. Each control carries a one-line explanation
+of what it changes, and the fields with a known set of values — codec, preset,
+container, channels — are pickers rather than free text. Saving reports the
+Worker's validation errors back in the form.
 
 You only need a second profile when a collection must compile differently from
 the baseline.
