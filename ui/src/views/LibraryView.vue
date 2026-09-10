@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import ClipCard from "@/components/ClipCard.vue";
+import ClipDrawer from "@/components/ClipDrawer.vue";
 import ClipTable from "@/components/ClipTable.vue";
 import { useClips } from "@/composables/useClips";
 import { useSession } from "@/composables/useSession";
-import type { Clip } from "@/types";
 
 const {
   clips,
@@ -23,7 +23,18 @@ const { collections } = useSession();
 const LAYOUT_KEY = "manager-layout";
 const layout = ref<"grid" | "table">("grid");
 const error = ref("");
-const openClip = ref<Clip | null>(null);
+// The drawer tracks an id rather than an object, so a catalog reload keeps it
+// pointed at the live record instead of a stale copy.
+const openClipId = ref<string | null>(null);
+const openClip = computed(() => clips.value.find((clip) => clip.id === openClipId.value) ?? null);
+
+async function reload(): Promise<void> {
+  try {
+    await load();
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : String(cause);
+  }
+}
 
 function rememberLayout(next: "grid" | "table"): void {
   layout.value = next;
@@ -131,7 +142,7 @@ onMounted(async () => {
         :clip="clip"
         :selected="selected.has(clip.id)"
         @toggle="toggle"
-        @open="openClip = $event"
+        @open="openClipId = $event.id"
       />
     </div>
     <ClipTable
@@ -139,7 +150,14 @@ onMounted(async () => {
       :clips="filtered"
       :selected="selected"
       @toggle="toggle"
-      @open="openClip = $event"
+      @open="openClipId = $event.id"
+    />
+
+    <ClipDrawer
+      v-if="openClip"
+      :clip="openClip"
+      @close="openClipId = null"
+      @changed="reload"
     />
   </section>
 </template>
