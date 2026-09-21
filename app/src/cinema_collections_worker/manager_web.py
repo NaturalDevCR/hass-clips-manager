@@ -283,7 +283,7 @@ def install_manager_routes(app: FastAPI, settings: WorkerSettings) -> None:
     def clip_source(request: Request, clip_id: str) -> FileResponse:
         if _valid_session(request) is None:
             raise HTTPException(status_code=401, detail="Library Manager session required")
-        manager: LibraryManager = request.app.state.library_manager
+        manager = request.app.state.library_manager
         try:
             row = manager._clip_row(clip_id)
             path = manager._source_path(row)

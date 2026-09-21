@@ -701,7 +701,7 @@ class JobWorker:
             row = self.db.connection.execute(
                 "SELECT metadata FROM clips WHERE id=?", (job.clip_id,)
             ).fetchone()
-            metadata = json.loads(str(row["metadata"])) if row is not None else {}
+            metadata: dict[str, Any] = json.loads(str(row["metadata"])) if row is not None else {}
             metadata.pop("failed_reason", None)
             metadata["width"] = probe.width
             metadata["height"] = probe.height
