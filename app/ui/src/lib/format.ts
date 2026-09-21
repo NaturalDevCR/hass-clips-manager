@@ -1,5 +1,18 @@
 import type { Clip, Job } from "@/types";
 
+export const DEFAULT_TIME_ZONE = "America/Costa_Rica";
+
+export function formatDateTime(iso: string | null, timeZone: string = DEFAULT_TIME_ZONE): string {
+  if (!iso) return "—";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso;
+  return new Intl.DateTimeFormat("es-CR", {
+    dateStyle: "medium",
+    timeStyle: "short",
+    timeZone,
+  }).format(date);
+}
+
 export function formatDuration(seconds: number): string {
   if (!seconds || seconds <= 0) return "—";
   const total = Math.floor(seconds);
