@@ -31,6 +31,7 @@ const aspectRatio = ref<number | null>(null);
 const displaySize = ref<Size>({ width: 0, height: 0 });
 const naturalSize = ref<Size>({ width: 0, height: 0 });
 const cropRect = ref<CropRect>({ x: 0, y: 0, width: 0, height: 0 });
+const metadataLoaded = computed(() => naturalSize.value.width > 0 && naturalSize.value.height > 0);
 
 const status = ref("");
 const failure = ref("");
@@ -286,10 +287,12 @@ watch(
           <input
             type="checkbox"
             :checked="cropEnabled"
+            :disabled="!metadataLoaded"
             @change="toggleCrop(($event.target as HTMLInputElement).checked)"
           />
           Crop this clip
         </label>
+        <p v-if="!metadataLoaded" class="text-xs text-muted">Loading preview…</p>
         <div v-if="cropEnabled" class="flex flex-wrap gap-2">
           <button
             v-for="preset in ASPECT_PRESETS"
