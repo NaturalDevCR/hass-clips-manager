@@ -833,3 +833,35 @@ def test_manager_creates_and_patches_a_profile(tmp_path: Path) -> None:
     assert patched.json()["name"] == "Renamed"
     listed = [profile["id"] for profile in client.get("/manager/profiles").json()]
     assert "custom" in listed
+
+
+def test_manager_clip_source_route_requires_a_session(tmp_path: Path) -> None:
+    client = TestClient(_app(tmp_path))
+    _seed_collection(client)
+    clip_id = _seed_catalogued_clip(client)
+
+    response = TestClient(_app(tmp_path)).get(f"/manager/clips/{clip_id}/source")
+
+    assert response.status_code == 401
+
+
+def test_manager_clip_source_route_streams_the_file_with_range_support(tmp_path: Path) -> None:
+    client = TestClient(_app(tmp_path))
+    _seed_collection(client)
+    clip_id = _seed_catalogued_clip(client)
+
+    full = client.get(f"/manager/clips/{clip_id}/source")
+    assert full.status_code == 200
+    assert full.content == b"clip-bytes"
+
+    ranged = client.get(f"/manager/clips/{clip_id}/source", headers={"Range": "bytes=0-3"})
+    assert ranged.status_code == 206
+    assert ranged.content == b"clip"
+    assert ranged.headers["content-range"] == "bytes 0-3/10"
+
+
+def test_manager_clip_source_route_404s_for_an_unknown_clip(tmp_path: Path) -> None:
+    client = TestClient(_app(tmp_path))
+    _manager_session(client)
+
+    assert client.get("/manager/clips/not-a-real-clip/source").status_code == 404

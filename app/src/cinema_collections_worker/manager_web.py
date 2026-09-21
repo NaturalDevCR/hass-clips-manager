@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import Body, FastAPI, Header, HTTPException, Query, Request, UploadFile
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from .domain import CollectionCreate, CollectionPatch, ProfileCreate, ProfilePatch
@@ -253,6 +253,18 @@ def install_manager_routes(app: FastAPI, settings: WorkerSettings) -> None:
         if _valid_session(request) is None:
             raise HTTPException(status_code=401, detail="Library Manager session required")
         return _clip_payloads(request.app.state.database)
+
+    @app.get("/manager/clips/{clip_id}/source", include_in_schema=False)
+    def clip_source(request: Request, clip_id: str) -> FileResponse:
+        if _valid_session(request) is None:
+            raise HTTPException(status_code=401, detail="Library Manager session required")
+        manager: LibraryManager = request.app.state.library_manager
+        try:
+            row = manager._clip_row(clip_id)
+            path = manager._source_path(row)
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status_code=404, detail="clip source is unavailable") from exc
+        return FileResponse(path, filename=path.name)
 
     @app.get("/manager/collections", include_in_schema=False)
     def list_manager_collections(request: Request) -> list[dict[str, Any]]:
