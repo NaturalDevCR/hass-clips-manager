@@ -27,6 +27,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from .catalog import CatalogService, file_fingerprint
 from .database import Database
 from .ffmpeg import FfmpegCommandBuilder
+from .models import ClipState
 from .paths import RootKey, SafePathResolver, validate_collection_id, validate_relative_path
 from .probe import MediaProbeResult, ProbeClient
 from .profile_validation import ProcessingProfile, profile_fingerprint, validate_profile
@@ -593,6 +594,137 @@ class JobWorker:
             if staging.exists():
                 staging.unlink()
 
+    def _edit_command(
+        self,
+        source: Path,
+        output: Path,
+        trim_start: float,
+        trim_end: float,
+        crop: dict[str, int] | None,
+    ) -> list[str]:
+        command = [
+            self.command_builder.executable,
+            "-y",
+            "-ss",
+            f"{trim_start:.3f}",
+            "-to",
+            f"{trim_end:.3f}",
+            "-i",
+            str(source),
+            "-progress",
+            "pipe:1",
+            "-nostats",
+        ]
+        if crop is not None:
+            command += ["-vf", f"crop={crop['width']}:{crop['height']}:{crop['x']}:{crop['y']}"]
+        command += [
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "18",
+            "-c:a",
+            "aac",
+            "-movflags",
+            "+faststart",
+            str(output),
+        ]
+        return command
+
+    def _publish_edit(self, temporary_output: Path, source: Path) -> None:
+        source_root = self.resolver.roots[RootKey.SOURCE]
+        resolved_source = source.resolve(strict=False)
+        try:
+            resolved_source.relative_to(source_root)
+        except ValueError as exc:
+            raise ValueError("edited clip escapes the source root") from exc
+        staging = resolved_source.parent / f".{resolved_source.name}.{uuid.uuid4().hex}.editing"
+        shutil.copyfile(temporary_output, staging)
+        try:
+            os.replace(staging, resolved_source)
+        finally:
+            if staging.exists():
+                staging.unlink()
+
+    def _record_edit_failure(self, clip_id: str, error: str | None) -> None:
+        if error is None:
+            return
+        row = self.db.connection.execute(
+            "SELECT metadata FROM clips WHERE id=?", (clip_id,)
+        ).fetchone()
+        if row is None:
+            return
+        metadata = json.loads(str(row["metadata"]) or "{}")
+        metadata["failed_reason"] = error[:500]
+        with self.db.transaction():
+            self.db.connection.execute(
+                "UPDATE clips SET state=?, metadata=?, updated_at=? WHERE id=?",
+                (
+                    ClipState.FAILED.value,
+                    json.dumps(metadata, sort_keys=True),
+                    _now().isoformat(),
+                    clip_id,
+                ),
+            )
+
+    def _run_edit_job(self, job: JobRecord) -> JobRunResult:
+        settings = job.profile_settings
+        trim_start = float(settings.get("trim_start_seconds", 0.0))
+        trim_end = float(settings.get("trim_end_seconds", 0.0))
+        crop = settings.get("crop")
+        temp_dir = self._temporary_directory(job.id)
+        try:
+            temp_dir.mkdir(parents=True, exist_ok=False)
+            source = self.resolver.resolve(RootKey.SOURCE.value, job.source_relative_path)
+            if not source.is_file():
+                raise ValueError("clip source is unavailable")
+            temporary_output = temp_dir / f"edited{source.suffix}"
+            command = self._edit_command(source, temporary_output, trim_start, trim_end, crop)
+            timeout_seconds = max(60.0, (trim_end - trim_start) * 4)
+            running = job.model_copy(
+                update={
+                    "duration_seconds": max(0.0, trim_end - trim_start),
+                    "progress": JobProgress(stage=JobStage.ENCODING, percent=0),
+                }
+            )
+            self.queue.update(running)
+            success, cancelled, output = self._run_process(running, command, timeout_seconds)
+            if cancelled:
+                return JobRunResult(job=self._finish(job, JobState.CANCELLED))
+            if not success or not temporary_output.is_file():
+                raise ValueError(_failure_reason(output, "clip edit failed"))
+            probe = self.probe_client.probe(temporary_output)
+            if not probe.valid:
+                raise ValueError("edited clip failed validation")
+            self._publish_edit(temporary_output, source)
+            row = self.db.connection.execute(
+                "SELECT metadata FROM clips WHERE id=?", (job.clip_id,)
+            ).fetchone()
+            metadata: dict[str, Any] = json.loads(str(row["metadata"])) if row is not None else {}
+            metadata.pop("failed_reason", None)
+            metadata["width"] = probe.width
+            metadata["height"] = probe.height
+            with self.db.transaction():
+                self.db.connection.execute(
+                    "UPDATE clips SET state=?, duration_seconds=?, metadata=?, updated_at=? WHERE id=?",
+                    (
+                        ClipState.DISCOVERED.value,
+                        probe.duration_seconds,
+                        json.dumps(metadata, sort_keys=True),
+                        _now().isoformat(),
+                        job.clip_id,
+                    ),
+                )
+            self._record_log("info", f"edit complete duration={probe.duration_seconds:.2f}", job.id)
+            return JobRunResult(job=self._finish(job, JobState.SUCCEEDED))
+        except Exception as exc:
+            finished = self._finish(job, JobState.FAILED, str(exc)[:1000])
+            self._record_edit_failure(job.clip_id, finished.error)
+            return JobRunResult(job=finished)
+        finally:
+            self._cleanup(temp_dir)
+
     def _finish(
         self, job: JobRecord, state: JobState, error: str | None = None, *, retry: bool = False
     ) -> JobRecord:
@@ -754,6 +886,8 @@ class JobWorker:
             return self._run_scan_job(job)
         if job.kind == "cleanup":
             return self._run_cleanup_job(job)
+        if job.kind == "edit":
+            return self._run_edit_job(job)
         if job.kind != "compile":
             return JobRunResult(
                 job=self._finish(job, JobState.FAILED, f"unsupported job kind: {job.kind}")

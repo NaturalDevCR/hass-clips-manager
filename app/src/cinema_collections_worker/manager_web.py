@@ -12,8 +12,8 @@ from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import Body, FastAPI, Header, HTTPException, Query, Request, UploadFile
-from fastapi.responses import HTMLResponse
-from pydantic import BaseModel, ConfigDict, Field
+from fastapi.responses import FileResponse, HTMLResponse
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
 
 from .domain import CollectionCreate, CollectionPatch, ProfileCreate, ProfilePatch
 from .library_manager import DeleteTarget, LibraryManager, TrashTarget, UploadKind
@@ -61,6 +61,31 @@ class _DeleteBody(BaseModel):
 
     target: DeleteTarget
     confirmation: str
+
+
+class _CropBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    x: int = Field(ge=0)
+    y: int = Field(ge=0)
+    width: int = Field(gt=0)
+    height: int = Field(gt=0)
+
+
+class _EditBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    trim_start_seconds: float = Field(ge=0)
+    trim_end_seconds: float = Field(gt=0)
+    crop: _CropBody | None = None
+
+    @field_validator("trim_end_seconds")
+    @classmethod
+    def _trim_end_after_start(cls, value: float, info: ValidationInfo) -> float:
+        start = info.data.get("trim_start_seconds")
+        if start is not None and value <= start:
+            raise ValueError("trim_end_seconds must be greater than trim_start_seconds")
+        return value
 
 
 def _sessions(app: FastAPI) -> dict[str, tuple[str, float]]:
@@ -253,6 +278,18 @@ def install_manager_routes(app: FastAPI, settings: WorkerSettings) -> None:
         if _valid_session(request) is None:
             raise HTTPException(status_code=401, detail="Library Manager session required")
         return _clip_payloads(request.app.state.database)
+
+    @app.get("/manager/clips/{clip_id}/source", include_in_schema=False)
+    def clip_source(request: Request, clip_id: str) -> FileResponse:
+        if _valid_session(request) is None:
+            raise HTTPException(status_code=401, detail="Library Manager session required")
+        manager = request.app.state.library_manager
+        try:
+            row = manager._clip_row(clip_id)
+            path = manager._source_path(row)
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status_code=404, detail="clip source is unavailable") from exc
+        return FileResponse(path, filename=path.name)
 
     @app.get("/manager/collections", include_in_schema=False)
     def list_manager_collections(request: Request) -> list[dict[str, Any]]:
@@ -538,6 +575,26 @@ def install_manager_routes(app: FastAPI, settings: WorkerSettings) -> None:
         csrf: Annotated[str | None, Header(alias="X-CSRF-Token")] = None,
     ) -> Any:
         return _dump(_require_action(request, csrf).request_recompile(clip_id))
+
+    @app.post("/manager/clips/{clip_id}/edit", status_code=202, include_in_schema=False)
+    def edit_clip(
+        request: Request,
+        clip_id: str,
+        payload: _EditBody,
+        csrf: Annotated[str | None, Header(alias="X-CSRF-Token")] = None,
+    ) -> Any:
+        manager = _require_action(request, csrf)
+        crop = payload.crop.model_dump() if payload.crop else None
+        try:
+            return _dump(
+                manager.request_edit(
+                    clip_id, payload.trim_start_seconds, payload.trim_end_seconds, crop
+                )
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="clip not found") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @app.post("/manager/clips/{clip_id}/trash", include_in_schema=False)
     def trash(
