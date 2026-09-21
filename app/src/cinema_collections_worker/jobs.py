@@ -682,14 +682,13 @@ class JobWorker:
             temporary_output = temp_dir / f"edited{source.suffix}"
             command = self._edit_command(source, temporary_output, trim_start, trim_end, crop)
             timeout_seconds = max(60.0, (trim_end - trim_start) * 4)
-            running = self.queue.update(
-                job.model_copy(
-                    update={
-                        "duration_seconds": max(0.0, trim_end - trim_start),
-                        "progress": JobProgress(stage=JobStage.ENCODING, percent=0),
-                    }
-                )
+            running = job.model_copy(
+                update={
+                    "duration_seconds": max(0.0, trim_end - trim_start),
+                    "progress": JobProgress(stage=JobStage.ENCODING, percent=0),
+                }
             )
+            self.queue.update(running)
             success, cancelled, output = self._run_process(running, command, timeout_seconds)
             if cancelled:
                 return JobRunResult(job=self._finish(job, JobState.CANCELLED))

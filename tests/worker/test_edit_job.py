@@ -106,6 +106,28 @@ def test_edit_job_passes_trim_and_crop_to_ffmpeg(tmp_path):
     assert command[command.index("-vf") + 1] == "crop=800:600:10:20"
 
 
+def test_edit_job_computes_progress_against_the_trim_window_not_the_source_duration(
+    tmp_path, monkeypatch
+):
+    db, resolver, _service = _configured_service(tmp_path)
+    _enqueue_edit(db, trim_start=2.0, trim_end=7.0)
+    captured: dict[str, float] = {}
+    original_run_process = JobWorker._run_process
+
+    def spy(self, job, command, timeout_seconds):
+        captured["duration_seconds"] = job.duration_seconds
+        return original_run_process(self, job, command, timeout_seconds)
+
+    monkeypatch.setattr(JobWorker, "_run_process", spy)
+
+    def process_factory(command, **_kwargs):
+        return _EditingProcess(Path(command[-1]))
+
+    JobWorker(db, resolver, probe_client=_EditedProbe(), process_factory=process_factory).run_once()
+
+    assert captured["duration_seconds"] == 5.0
+
+
 def test_edit_job_failure_leaves_the_original_source_untouched(tmp_path):
     db, resolver, _service = _configured_service(tmp_path)
     job = _enqueue_edit(db)
