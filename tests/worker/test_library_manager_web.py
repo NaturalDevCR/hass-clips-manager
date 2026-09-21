@@ -865,3 +865,182 @@ def test_manager_clip_source_route_404s_for_an_unknown_clip(tmp_path: Path) -> N
     _manager_session(client)
 
     assert client.get("/manager/clips/not-a-real-clip/source").status_code == 404
+
+
+def test_request_edit_rejects_a_trim_range_outside_the_clip_duration(tmp_path: Path) -> None:
+    from cinema_collections_worker.database import Database
+    from cinema_collections_worker.domain import CollectionCreate, ProfileCreate
+    from cinema_collections_worker.library_manager import LibraryManager
+    from cinema_collections_worker.paths import SafePathResolver
+    from cinema_collections_worker.repositories import CollectionRepository, ProfileRepository
+
+    db = Database.create(str(tmp_path / "worker.sqlite3"))
+    # The clips table's collection_id has a FOREIGN KEY into collections(id),
+    # so a "films" collection (and its referenced profile) must exist before
+    # a clip row naming it can be inserted below.
+    ProfileRepository(db).create(
+        ProfileCreate(id="default", name="Default", settings={}), actor="test", request_id="profile"
+    )
+    CollectionRepository(db).create(
+        CollectionCreate(
+            id="films", name="Films", source_directory="films", processing_profile_id="default"
+        ),
+        actor="test",
+        request_id="collection",
+    )
+    resolver = SafePathResolver(
+        {
+            RootKey.SOURCE: tmp_path / "source",
+            RootKey.COMPILED: tmp_path / "compiled",
+            RootKey.TEMP: tmp_path / "temp",
+            RootKey.ASSETS: tmp_path / "assets",
+        }
+    )
+    for root in resolver.roots.values():
+        root.mkdir(parents=True, exist_ok=True)
+    with db.connection:
+        db.connection.execute(
+            "INSERT INTO clips(id,collection_id,state,relative_source_path,relative_output_path,"
+            "duration_seconds,output_available,metadata,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
+            (
+                "77777777-7777-7777-7777-777777777777",
+                "films",
+                "ready",
+                "films/feature.mp4",
+                "films/feature.mp4",
+                10.0,
+                0,
+                "{}",
+                "2026-01-01T00:00:00+00:00",
+            ),
+        )
+    manager = LibraryManager(db, resolver)
+
+    import pytest
+
+    with pytest.raises(ValueError, match="duration"):
+        manager.request_edit("77777777-7777-7777-7777-777777777777", 0.0, 20.0, None)
+    with pytest.raises(ValueError, match="after"):
+        manager.request_edit("77777777-7777-7777-7777-777777777777", 5.0, 1.0, None)
+    with pytest.raises(ValueError, match="scanned"):
+        manager.request_edit(
+            "77777777-7777-7777-7777-777777777777",
+            0.0,
+            5.0,
+            {"x": 0, "y": 0, "width": 100, "height": 100},
+        )
+
+
+def test_manager_edit_route_queues_a_trim_and_crop_job(tmp_path: Path) -> None:
+    client = TestClient(_app(tmp_path))
+    _seed_collection(client)
+    with client.app.state.database.connection:
+        client.app.state.database.connection.execute(
+            "INSERT INTO clips(id,collection_id,state,relative_source_path,relative_output_path,"
+            "duration_seconds,output_available,metadata,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
+            (
+                "66666666-6666-6666-6666-666666666666",
+                "films",
+                "ready",
+                "films/feature.mp4",
+                "films/66666666-6666-6666-6666-666666666666.mp4",
+                20.0,
+                1,
+                json.dumps({"width": 1920, "height": 1080}),
+                "2026-01-01T00:00:00+00:00",
+            ),
+        )
+    csrf = _manager_session(client)
+
+    queued = client.post(
+        "/manager/clips/66666666-6666-6666-6666-666666666666/edit",
+        headers={"X-CSRF-Token": csrf},
+        json={
+            "trim_start_seconds": 2,
+            "trim_end_seconds": 10,
+            "crop": {"x": 0, "y": 0, "width": 1281, "height": 721},
+        },
+    )
+
+    assert queued.status_code == 202
+    job_id = queued.json()["details"]["job_id"]
+    job = client.get(f"/manager/jobs/{job_id}").json()
+    assert job["state"] in {"queued", "running"}
+
+
+def test_manager_edit_route_requires_the_clip_to_be_scanned_before_cropping(tmp_path: Path) -> None:
+    # duration_seconds is set to 10 (not 0, as a bare upload would leave it) so
+    # the trim range passes before the crop/scan check is what actually fires.
+    client = TestClient(_app(tmp_path))
+    _seed_collection(client)
+    with client.app.state.database.connection:
+        client.app.state.database.connection.execute(
+            "INSERT INTO clips(id,collection_id,state,relative_source_path,relative_output_path,"
+            "duration_seconds,output_available,metadata,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
+            (
+                "88888888-8888-8888-8888-888888888888",
+                "films",
+                "discovered",
+                "films/unscanned.mp4",
+                "films/unscanned.mp4",
+                10.0,
+                0,
+                "{}",
+                "2026-01-01T00:00:00+00:00",
+            ),
+        )
+    csrf = _manager_session(client)
+
+    rejected = client.post(
+        "/manager/clips/88888888-8888-8888-8888-888888888888/edit",
+        headers={"X-CSRF-Token": csrf},
+        json={
+            "trim_start_seconds": 0,
+            "trim_end_seconds": 1,
+            "crop": {"x": 0, "y": 0, "width": 100, "height": 100},
+        },
+    )
+
+    assert rejected.status_code == 422
+    assert "scanned" in rejected.json()["message"]
+
+
+def test_manager_edit_route_rejects_trim_end_before_trim_start(tmp_path: Path) -> None:
+    client = TestClient(_app(tmp_path))
+    _seed_collection(client)
+    clip_id = _seed_catalogued_clip(client)
+    csrf = _manager_session(client)
+
+    rejected = client.post(
+        f"/manager/clips/{clip_id}/edit",
+        headers={"X-CSRF-Token": csrf},
+        json={"trim_start_seconds": 5, "trim_end_seconds": 1},
+    )
+
+    assert rejected.status_code == 422
+
+
+def test_manager_edit_route_requires_csrf(tmp_path: Path) -> None:
+    client = TestClient(_app(tmp_path))
+    _seed_collection(client)
+    clip_id = _seed_catalogued_clip(client)
+
+    rejected = client.post(
+        f"/manager/clips/{clip_id}/edit",
+        json={"trim_start_seconds": 0, "trim_end_seconds": 1},
+    )
+
+    assert rejected.status_code == 403
+
+
+def test_manager_edit_route_404s_for_an_unknown_clip(tmp_path: Path) -> None:
+    client = TestClient(_app(tmp_path))
+    csrf = _manager_session(client)
+
+    rejected = client.post(
+        "/manager/clips/not-a-real-clip/edit",
+        headers={"X-CSRF-Token": csrf},
+        json={"trim_start_seconds": 0, "trim_end_seconds": 1},
+    )
+
+    assert rejected.status_code == 404

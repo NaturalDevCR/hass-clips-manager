@@ -686,6 +686,65 @@ class LibraryManager:
             details["job_ids"] = [job.id for job in jobs]
         return self._audit("library.recompile_requested", str(clip_id), details)
 
+    def request_edit(
+        self,
+        clip_id: str | UUID,
+        trim_start_seconds: float,
+        trim_end_seconds: float,
+        crop: dict[str, int] | None,
+    ) -> AuditEvent:
+        row = self._clip_row(clip_id)
+        duration = float(row["duration_seconds"] or 0)
+        if trim_end_seconds <= trim_start_seconds:
+            raise ValueError("trim end must come after trim start")
+        if trim_start_seconds < 0 or trim_end_seconds > duration:
+            raise ValueError("trim range must stay within the clip's duration")
+        if crop is not None:
+            metadata = json.loads(row["metadata"] or "{}")
+            width, height = metadata.get("width"), metadata.get("height")
+            if not isinstance(width, int) or not isinstance(height, int):
+                raise ValueError("clip must be scanned before it can be cropped")
+            if (
+                crop["x"] < 0
+                or crop["y"] < 0
+                or crop["x"] + crop["width"] > width
+                or crop["y"] + crop["height"] > height
+            ):
+                raise ValueError("crop rectangle must stay within the source frame")
+            crop = {
+                "x": crop["x"],
+                "y": crop["y"],
+                "width": crop["width"] - (crop["width"] % 2),
+                "height": crop["height"] - (crop["height"] % 2),
+            }
+            if crop["width"] <= 0 or crop["height"] <= 0:
+                raise ValueError("crop rectangle is too small")
+        job_id = str(uuid.uuid4())
+        job = self.queue.enqueue(
+            JobRecord(
+                id=job_id,
+                kind="edit",
+                collection_id=str(row["collection_id"]),
+                clip_id=str(clip_id),
+                source_relative_path=str(row["relative_source_path"]),
+                output_relative_path=str(row["relative_output_path"] or f"edit/{job_id}.request"),
+                source_fingerprint="library-request",
+                profile_fingerprint="library-request",
+                profile_settings={
+                    "trim_start_seconds": trim_start_seconds,
+                    "trim_end_seconds": trim_end_seconds,
+                    "crop": crop,
+                },
+                duration_seconds=duration,
+                progress=JobProgress(stage=JobStage.QUEUED, percent=0, eta_seconds=None),
+            )
+        )
+        return self._audit(
+            "library.edit_requested",
+            str(clip_id),
+            {"collection_id": row["collection_id"], "job_id": job.id},
+        )
+
     def move_to_trash(self, clip_id: str, target: TrashTarget) -> AuditEvent:
         target = TrashTarget(target)
         row = self._clip_row(clip_id)
