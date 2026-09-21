@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
+import ClipEditor from "@/components/ClipEditor.vue";
 import StateBadge from "@/components/StateBadge.vue";
 import { apiFetch } from "@/composables/useApi";
 import { jobIdFrom, useJobs } from "@/composables/useJobs";
@@ -20,6 +21,7 @@ const notes = ref(props.clip.notes);
 const destination = ref(props.clip.relative_source_path);
 const trashTarget = ref("source");
 const deleteTarget = ref("source");
+const editorOpen = ref(false);
 
 // An unavailable output cannot be trashed or deleted, so it is never offered.
 const targets = computed(() =>
@@ -218,6 +220,9 @@ async function copyId(): Promise<void> {
             <button type="button" class="btn-primary" :disabled="busy" @click="queued('recompile')">
               Recompile
             </button>
+            <button type="button" class="btn" :disabled="busy" @click="editorOpen = true">
+              Trim / Crop
+            </button>
           </div>
         </section>
 
@@ -272,5 +277,16 @@ async function copyId(): Promise<void> {
         </section>
       </div>
     </aside>
+    <ClipEditor
+      v-if="editorOpen"
+      :clip="clip"
+      @close="editorOpen = false"
+      @changed="
+        () => {
+          editorOpen = false;
+          emit('changed');
+        }
+      "
+    />
   </div>
 </template>
