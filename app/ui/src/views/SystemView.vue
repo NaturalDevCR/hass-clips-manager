@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { apiFetch } from "@/composables/useApi";
 import { useClips } from "@/composables/useClips";
 import { useJobs } from "@/composables/useJobs";
 import { useSession } from "@/composables/useSession";
-import { jobTarget } from "@/lib/format";
+import { DEFAULT_TIME_ZONE, formatDateTime, jobTarget } from "@/lib/format";
 import { COLLECTION_ID_HINT, COLLECTION_ID_PATTERN } from "@/composables/useUpload";
 import type { LogEntry, TrashEntry } from "@/types";
 
@@ -23,6 +23,30 @@ const trashError = ref("");
 
 const logs = ref<LogEntry[]>([]);
 const logError = ref("");
+
+const TIMEZONE_KEY = "manager-timezone";
+const ZONE_OPTIONS = computed(() => {
+  const browserZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const options = [
+    { value: "America/Costa_Rica", label: "Costa Rica" },
+    { value: "UTC", label: "UTC" },
+    { value: browserZone, label: `Browser (${browserZone})` },
+  ];
+  return options.filter(
+    (option, index) => options.findIndex((candidate) => candidate.value === option.value) === index,
+  );
+});
+const timezone = ref(DEFAULT_TIME_ZONE);
+
+function rememberTimezone(next: string): void {
+  timezone.value = next;
+  try {
+    localStorage.setItem(TIMEZONE_KEY, next);
+  } catch {
+    // Private windows and blocked site data make storage throw; the choice
+    // simply does not survive a reload.
+  }
+}
 
 async function refreshTrash(): Promise<void> {
   trashError.value = "";
@@ -43,6 +67,12 @@ async function refreshLogs(): Promise<void> {
 }
 
 onMounted(async () => {
+  try {
+    const stored = localStorage.getItem(TIMEZONE_KEY);
+    if (stored) timezone.value = stored;
+  } catch {
+    // Same fallback as above: keep the default when storage is unavailable.
+  }
   await Promise.all([refreshTrash(), refreshLogs(), refreshJobs()]);
 });
 
@@ -132,7 +162,7 @@ async function restore(entry: TrashEntry): Promise<void> {
         >
           <code class="text-xs" :title="entry.clip_id">{{ entry.clip_id.slice(0, 8) }}</code>
           <span class="text-muted">{{ entry.target }}</span>
-          <span class="text-xs text-muted">{{ entry.created_at }}</span>
+          <span class="text-xs text-muted">{{ formatDateTime(entry.created_at, timezone) }}</span>
           <button type="button" class="btn px-2 py-1 text-xs" @click="restore(entry)">
             Restore
           </button>
@@ -143,7 +173,21 @@ async function restore(entry: TrashEntry): Promise<void> {
     <article class="panel flex flex-col gap-3">
       <div class="flex items-center justify-between gap-3">
         <h2 class="font-semibold">Recent jobs</h2>
-        <button type="button" class="btn px-2 py-1 text-xs" @click="refreshJobs">Refresh</button>
+        <div class="flex items-center gap-2">
+          <label class="flex items-center gap-2 text-xs text-muted">
+            <span>Timezone</span>
+            <select
+              class="field w-auto"
+              :value="timezone"
+              @change="rememberTimezone(($event.target as HTMLSelectElement).value)"
+            >
+              <option v-for="zone in ZONE_OPTIONS" :key="zone.value" :value="zone.value">
+                {{ zone.label }}
+              </option>
+            </select>
+          </label>
+          <button type="button" class="btn px-2 py-1 text-xs" @click="refreshJobs">Refresh</button>
+        </div>
       </div>
       <p v-if="!jobs.length" class="text-sm text-muted">No jobs yet.</p>
       <div v-else class="overflow-x-auto">
@@ -170,8 +214,8 @@ async function restore(entry: TrashEntry): Promise<void> {
               </td>
               <td class="py-2 pr-3">{{ job.kind }}</td>
               <td class="py-2 pr-3">{{ job.state }}</td>
-              <td class="py-2 pr-3 text-xs text-muted">{{ job.created_at || "—" }}</td>
-              <td class="py-2 pr-3 text-xs text-muted">{{ job.finished_at || "—" }}</td>
+              <td class="py-2 pr-3 text-xs text-muted">{{ formatDateTime(job.created_at, timezone) }}</td>
+              <td class="py-2 pr-3 text-xs text-muted">{{ formatDateTime(job.finished_at, timezone) }}</td>
               <td class="py-2 text-xs">{{ job.error || "" }}</td>
             </tr>
           </tbody>
@@ -203,7 +247,9 @@ async function restore(entry: TrashEntry): Promise<void> {
               class="border-t border-line"
               :class="entry.level === 'error' && 'text-danger'"
             >
-              <td class="py-2 pr-3 text-xs whitespace-nowrap text-muted">{{ entry.timestamp }}</td>
+              <td class="py-2 pr-3 text-xs whitespace-nowrap text-muted">
+                {{ formatDateTime(entry.timestamp, timezone) }}
+              </td>
               <td class="py-2 pr-3 text-xs">{{ entry.level }}</td>
               <td class="py-2 text-xs">{{ entry.message }}</td>
             </tr>
