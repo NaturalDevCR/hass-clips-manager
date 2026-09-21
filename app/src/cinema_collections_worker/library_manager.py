@@ -728,7 +728,7 @@ class LibraryManager:
                 clip_id=str(clip_id),
                 source_relative_path=str(row["relative_source_path"]),
                 output_relative_path=str(row["relative_output_path"] or f"edit/{job_id}.request"),
-                source_fingerprint="library-request",
+                source_fingerprint=f"library-request:{job_id}",
                 profile_fingerprint="library-request",
                 profile_settings={
                     "trim_start_seconds": trim_start_seconds,

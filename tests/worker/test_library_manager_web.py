@@ -931,6 +931,66 @@ def test_request_edit_rejects_a_trim_range_outside_the_clip_duration(tmp_path: P
         )
 
 
+def test_request_edit_gives_two_consecutive_requests_distinct_job_ids(tmp_path: Path) -> None:
+    from cinema_collections_worker.database import Database
+    from cinema_collections_worker.domain import CollectionCreate, ProfileCreate
+    from cinema_collections_worker.library_manager import LibraryManager
+    from cinema_collections_worker.paths import SafePathResolver
+    from cinema_collections_worker.repositories import CollectionRepository, ProfileRepository
+
+    db = Database.create(str(tmp_path / "worker.sqlite3"))
+    # The clips table's collection_id has a FOREIGN KEY into collections(id),
+    # so a "films" collection (and its referenced profile) must exist before
+    # a clip row naming it can be inserted below.
+    ProfileRepository(db).create(
+        ProfileCreate(id="default", name="Default", settings={}), actor="test", request_id="profile"
+    )
+    CollectionRepository(db).create(
+        CollectionCreate(
+            id="films", name="Films", source_directory="films", processing_profile_id="default"
+        ),
+        actor="test",
+        request_id="collection",
+    )
+    resolver = SafePathResolver(
+        {
+            RootKey.SOURCE: tmp_path / "source",
+            RootKey.COMPILED: tmp_path / "compiled",
+            RootKey.TEMP: tmp_path / "temp",
+            RootKey.ASSETS: tmp_path / "assets",
+        }
+    )
+    for root in resolver.roots.values():
+        root.mkdir(parents=True, exist_ok=True)
+    with db.connection:
+        db.connection.execute(
+            "INSERT INTO clips(id,collection_id,state,relative_source_path,relative_output_path,"
+            "duration_seconds,output_available,metadata,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
+            (
+                "77777777-7777-7777-7777-777777777777",
+                "films",
+                "ready",
+                "films/feature.mp4",
+                "films/feature.mp4",
+                10.0,
+                0,
+                "{}",
+                "2026-01-01T00:00:00+00:00",
+            ),
+        )
+    manager = LibraryManager(db, resolver)
+
+    first = manager.request_edit("77777777-7777-7777-7777-777777777777", 0.0, 5.0, None)
+    second = manager.request_edit("77777777-7777-7777-7777-777777777777", 1.0, 8.0, None)
+
+    first_job_id = first.details["job_id"]
+    second_job_id = second.details["job_id"]
+    assert first_job_id != second_job_id, (
+        "a second edit request for the same clip must not collide with (and silently "
+        "be discarded in favor of) the first request's still-queued job"
+    )
+
+
 def test_manager_edit_route_queues_a_trim_and_crop_job(tmp_path: Path) -> None:
     client = TestClient(_app(tmp_path))
     _seed_collection(client)

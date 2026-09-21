@@ -37,6 +37,7 @@ const status = ref("");
 const failure = ref("");
 const busy = ref(false);
 const previewVersion = ref(0);
+const previewError = ref(false);
 
 const sourceUrl = computed(() => `manager/clips/${props.clip.id}/source?v=${previewVersion.value}`);
 
@@ -61,6 +62,10 @@ function onLoadedMetadata(): void {
   if (!element) return;
   naturalSize.value = { width: element.videoWidth, height: element.videoHeight };
   updateDisplaySize();
+}
+
+function onVideoError(): void {
+  previewError.value = true;
 }
 
 function toggleCrop(next: boolean): void {
@@ -150,7 +155,13 @@ async function apply(): Promise<void> {
         const percent = Math.round(update.progress?.percent ?? 0);
         status.value = `${update.progress?.stage ?? update.state} ${percent}%`;
       });
-      if (job?.state === "failed") throw new Error(job.error || "Edit failed.");
+      if (job === null) {
+        status.value = "";
+        failure.value =
+          "Lost track of the edit job — check the System view's job list for its outcome before trying again.";
+        return;
+      }
+      if (job.state === "failed") throw new Error(job.error || "Edit failed.");
     }
     previewVersion.value += 1;
     status.value = "Clip updated.";
@@ -192,6 +203,7 @@ watch(
     cropEnabled.value = false;
     aspectRatio.value = null;
     previewVersion.value = 0;
+    previewError.value = false;
   },
 );
 </script>
@@ -218,6 +230,9 @@ watch(
         {{ failure }}
       </p>
       <p v-else-if="status" role="status" class="text-sm text-muted">{{ status }}</p>
+      <p v-if="previewError" role="alert" class="rounded-lg bg-danger/15 p-3 text-sm text-danger">
+        Preview unavailable — the source file may be missing.
+      </p>
 
       <div
         class="relative mx-auto w-full max-w-xl select-none"
@@ -232,6 +247,7 @@ watch(
           controls
           muted
           @loadedmetadata="onLoadedMetadata"
+          @error="onVideoError"
         />
         <div
           v-if="cropEnabled"
@@ -309,7 +325,9 @@ watch(
 
       <div class="flex justify-end gap-2">
         <button type="button" class="btn" :disabled="busy" @click="emit('close')">Cancel</button>
-        <button type="button" class="btn-primary" :disabled="busy" @click="apply">Apply</button>
+        <button type="button" class="btn-primary" :disabled="busy || previewError" @click="apply">
+          Apply
+        </button>
       </div>
     </div>
   </div>
