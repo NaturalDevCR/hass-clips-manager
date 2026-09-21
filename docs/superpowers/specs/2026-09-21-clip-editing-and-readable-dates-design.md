@@ -107,12 +107,19 @@ existing `kind == "scan"` / `kind == "cleanup"` branches (added *before* the
    `-i` for exact-seek re-encoding (the "precise" trim already agreed on),
    trading some speed for a cut that lands exactly on the requested second
    rather than the nearest keyframe.
-3. On success, moves the **original** source into trash through
-   `LibraryManager`'s existing trash flow (same table/mechanism the Trash
-   panel already restores from), then publishes the encoded temp file at the
-   clip's original relative path. This means an edit is undoable through the
-   System view's existing Restore button, without inventing a second undo
-   path.
+3. On success, atomically swaps the encoded temp file into the clip's
+   existing source path with `os.replace` (same primitive
+   `LibraryManager._move_exact` already uses), so the on-disk path and the
+   clip's `relative_source_path` never change — only the bytes behind them
+   do. Only the ffmpeg step reads the pre-edit file; nothing unlinks it
+   before the replacement file exists on disk, so a failed encode never
+   loses the original. (This is deliberately *not* routed through the
+   Trash/Restore table: trash entries model "this file is gone from the
+   catalog," and `restore()` never rewrites `relative_source_path` — it
+   assumes the path was merely vacated, not repointed at different bytes.
+   Reusing it here would silently corrupt a later restore. The edit is the
+   destructive, replace-in-place operation already agreed on; there is no
+   undo beyond re-editing.)
 4. Updates the clip row: new `duration_seconds` (from probing the edited
    file), `state="discovered"` (eligible for recompile, same as a fresh
    scan result), clears `failed_reason`.
@@ -165,9 +172,9 @@ meant to be a quick, in-context action, not a destination.
   with a message the editor shows inline, before any job is queued.
 - ffmpeg failures fail the job the same way a failed compile does today:
   `state="failed"`, `error` populated, clip's `failed_reason` set, visible in
-  the drawer and in `SystemView`'s job table. The original source is left
-  untouched (only moved to trash after the re-encode succeeds), so a failed
-  edit never loses the clip.
+  the drawer and in `SystemView`'s job table. The original source is only
+  ever read, never unlinked, until the re-encoded replacement already exists
+  on disk, so a failed edit never loses the clip.
 - Streaming endpoint 404s cleanly if the source file is missing on disk,
   which `ClipEditor.vue` shows as a "preview unavailable" message rather than
   a broken video element.
