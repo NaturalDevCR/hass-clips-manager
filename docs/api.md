@@ -118,3 +118,16 @@ curl --fail --silent \
 
 The example uses a placeholder only; never commit or paste a real secret into
 documentation, shell history, or issue reports.
+
+### Playback duration
+
+Catalog `duration_seconds` describes the source used by Trim/Crop;
+`output_duration_seconds` describes the compiled file. The Worker measures existing
+compiled outputs on catalog reads and persists missing durations without
+recompilation. Probing has a two-second budget per catalog request; subsequent
+refreshes continue recovery when a library needs more time. Home Assistant's `select_next_clip.duration_seconds` uses only the
+compiled duration and returns `null` if it cannot be measured. Automations must
+handle this unknown value rather than substitute the source duration.
+
+The Library Manager labels source and compiled durations separately and supports
+searching by filename or a complete/partial clip ID, ignoring letter case.

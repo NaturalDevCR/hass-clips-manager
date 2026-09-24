@@ -197,6 +197,11 @@ class CinemaCollectionsCoordinator(DataUpdateCoordinator[CoordinatorSnapshot]):
             history=history_snapshot,
         )
 
+    def last_selection(self) -> dict[str, Any] | None:
+        """Expose the persisted last selection even while the Worker is offline."""
+        store = self._history() if self._history else None
+        return store.last_selection() if store else None
+
     def _resolve(self, now: datetime) -> SelectionResult:
         return resolve_active_collection(self.current_policies(), self._override(), now)
 

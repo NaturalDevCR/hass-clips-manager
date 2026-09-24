@@ -99,7 +99,7 @@ async def test_service_uses_only_current_ready_worker_clips_and_returns_media_de
     assert response.clip_id == "ready"
     assert response.relative_output_path == "films/ready.mp4"
     assert response.media_uri == "media-source://media_source/local/films/ready.mp4"
-    assert response.duration_seconds == 42.5
+    assert response.duration_seconds is None
     assert response.history_reset is False
 
 
@@ -241,3 +241,46 @@ async def test_selection_returns_nothing_when_no_clip_has_an_available_output(
 
     assert response.clip_id is None
     assert response.media_uri is None
+
+
+@pytest.mark.asyncio
+async def test_unknown_output_duration_never_uses_source(hass: object) -> None:
+    service = await make_service(hass, (clip("legacy"),), "unknown-output-duration")
+    response = await service.async_select(SelectRequest(collection_id="films"))
+    assert response.duration_seconds is None
+
+
+@pytest.mark.asyncio
+async def test_last_selection_survives_restart_reset_and_dry_run(hass: object) -> None:
+    from custom_components.cinema_collections.models import WorkerClip
+
+    history = PlaybackHistoryStore(hass, storage_key="last-selection-record")
+    await history.async_setup()
+    record = WorkerClip(
+        "video-id",
+        "films",
+        "ready",
+        "films/output.mp4",
+        130,
+        True,
+        output_duration_seconds=144,
+        relative_source_path="films/ace-ventura.mp4",
+    )
+
+    class Catalog:
+        async def async_list_clips(self):
+            return (record,)
+
+    service = SelectionService(history, Catalog())
+    await service.async_select(SelectRequest(collection_id="films", dry_run=True))
+    assert history.last_selection() is None
+    await service.async_select(SelectRequest(collection_id="films"))
+    await history.async_reset(None)
+    restored = PlaybackHistoryStore(hass, storage_key="last-selection-record")
+    await restored.async_setup()
+    last = restored.last_selection()
+    assert last is not None
+    assert last["clip_id"] == "video-id"
+    assert last["name"] == "ace-ventura.mp4"
+    assert last["duration_seconds"] == 144
+    assert last["selected_at"]

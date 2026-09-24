@@ -39,15 +39,28 @@ const targets = computed(() =>
 
 watch(
   () => props.clip,
-  (clip) => {
-    tags.value = clip.tags.join(", ");
-    notes.value = clip.notes;
-    destination.value = clip.relative_source_path;
-    trashTarget.value = "source";
-    deleteTarget.value = "source";
-    status.value = "";
-    failure.value = "";
-    previewVersion.value += 1;
+  (clip, previous) => {
+    const changedClip = clip.id !== previous.id;
+    if (changedClip || tags.value === previous.tags.join(", ")) {
+      tags.value = clip.tags.join(", ");
+    }
+    if (changedClip || notes.value === previous.notes) notes.value = clip.notes;
+    if (changedClip || destination.value === previous.relative_source_path) {
+      destination.value = clip.relative_source_path;
+    }
+    if (changedClip || !clip.output_available) {
+      trashTarget.value = "source";
+      deleteTarget.value = "source";
+    }
+    if (changedClip) {
+      status.value = "";
+      failure.value = "";
+    }
+    if (clip.id !== previous.id || clip.relative_source_path !== previous.relative_source_path ||
+        clip.relative_output_path !== previous.relative_output_path || clip.state !== previous.state ||
+        clip.duration_seconds !== previous.duration_seconds) {
+      previewVersion.value += 1;
+    }
   },
   { deep: true },
 );
@@ -187,7 +200,7 @@ async function copyId(): Promise<void> {
           <p class="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted">
             <StateBadge :state="clip.state" />
             <span>{{ clip.collection_id }}</span>
-            <span>{{ formatDuration(clip.duration_seconds) }}</span>
+            <span>Source: {{ formatDuration(clip.duration_seconds) }}</span>
           </p>
         </div>
         <button ref="closeButton" type="button" class="btn px-2 py-1" @click="emit('close')">

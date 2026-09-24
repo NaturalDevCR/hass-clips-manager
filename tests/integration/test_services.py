@@ -57,7 +57,7 @@ async def test_select_next_clip_returns_home_assistant_media_content_response(ha
             "media-source://media_source/local/cinema-collections/compiled/films/clip-1.mp4"
         ),
         "media_content_type": "video",
-        "duration_seconds": 9.5,
+        "duration_seconds": None,
         "history_reset": False,
         "output_is_stale": False,
     }

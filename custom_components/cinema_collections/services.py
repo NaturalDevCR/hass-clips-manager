@@ -268,7 +268,7 @@ async def async_run_action(
     if action == SERVICE_SELECT_NEXT_CLIP:
         if runtime.history is None:
             raise HomeAssistantError("Cinema Collections playback history is not ready")
-        return await async_select_next_clip(
+        response = await async_select_next_clip(
             history=runtime.history,
             client=runtime.client,
             collections=collections,
@@ -276,6 +276,8 @@ async def async_run_action(
             override=override_for_entry(entry),
             media_uri_prefix=str(entry.data.get(CONF_MEDIA_URI_PREFIX, DEFAULT_MEDIA_URI_PREFIX)),
         )
+        runtime.coordinator.async_update_listeners()
+        return response
     if action == SERVICE_RESET_HISTORY or action == "reset_history":
         if runtime.history is None:
             raise HomeAssistantError("Cinema Collections playback history is not ready")

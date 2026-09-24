@@ -109,6 +109,7 @@ def test_entity_modules_publish_required_stable_entity_keys() -> None:
         "collection_priorities",
         "compilation_summary",
         "clip_states",
+        "last_selected_clip",
     }
     assert {description.key for description in BUTTON_DESCRIPTIONS} == {
         "scan_library",
@@ -383,3 +384,24 @@ def test_coordinator_skips_a_collection_whose_policy_cannot_be_used() -> None:
     )
 
     assert [policy.id for policy in policies_from_collections(records)] == ["films"]
+
+
+@pytest.mark.asyncio
+async def test_last_selected_sensor_keeps_readable_record_offline(hass) -> None:
+    history = await make_history(hass, "last-readable-sensor")
+    await history.async_select(
+        "films",
+        ("clip-id",),
+        dry_run=False,
+        clip_details={"clip-id": {"name": "ace-ventura.mp4", "duration_seconds": 144}},
+    )
+    coordinator = make_coordinator(hass, history)
+    await coordinator.async_refresh()
+    description = next(d for d in SENSOR_DESCRIPTIONS if d.key == "last_selected_clip")
+    sensor = CinemaCollectionsSensor(coordinator, description, "last-video-entry")
+    assert sensor.native_value == "ace-ventura.mp4"
+    assert sensor.extra_state_attributes["clip_id"] == "clip-id"
+    assert sensor.extra_state_attributes["duration_seconds"] == 144
+    assert sensor.available
+    await history.async_reset(None)
+    assert sensor.native_value == "ace-ventura.mp4"

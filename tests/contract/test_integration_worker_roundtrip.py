@@ -122,6 +122,7 @@ class _MemoryHistory:
         dry_run: bool,
         *,
         playback_mode: str = "random",
+        clip_details: object = None,
     ) -> HistorySelection:
         selected = eligible_clip_ids[0] if eligible_clip_ids else None
         if selected is not None and not dry_run:

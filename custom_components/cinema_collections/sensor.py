@@ -23,6 +23,9 @@ class CinemaCollectionsSensorDescription(SensorEntityDescription):
 
 SENSOR_DESCRIPTIONS: tuple[CinemaCollectionsSensorDescription, ...] = (
     CinemaCollectionsSensorDescription(
+        key="last_selected_clip", translation_key="last_selected_clip"
+    ),
+    CinemaCollectionsSensorDescription(
         key="active_collection", translation_key="active_collection"
     ),
     CinemaCollectionsSensorDescription(
@@ -82,7 +85,7 @@ class CinemaCollectionsSensor(CoordinatorEntity[CinemaCollectionsCoordinator], S
     @property  # pyright: ignore[reportIncompatibleVariableOverride]
     def available(self) -> bool:
         """Keep the local active policy visible while Worker metrics degrade."""
-        if self.entity_description.key == "active_collection":
+        if self.entity_description.key in {"active_collection", "last_selected_clip"}:
             return True
         return self.coordinator.data.available
 
@@ -91,6 +94,9 @@ class CinemaCollectionsSensor(CoordinatorEntity[CinemaCollectionsCoordinator], S
         """Return a simple state while details remain in attributes."""
         snapshot = self.coordinator.data
         match self.entity_description.key:
+            case "last_selected_clip":
+                record = self.coordinator.last_selection()
+                return str(record.get("name") or record["clip_id"])[:255] if record else None
             case "active_collection":
                 return snapshot.active_collection_id
             case "processing_status":
@@ -119,6 +125,8 @@ class CinemaCollectionsSensor(CoordinatorEntity[CinemaCollectionsCoordinator], S
     @property  # pyright: ignore[reportIncompatibleVariableOverride]
     def extra_state_attributes(self) -> dict[str, Any]:
         """Publish reason, queue, progress, and compatibility for dashboards."""
+        if self.entity_description.key == "last_selected_clip":
+            return self.coordinator.last_selection() or {}
         snapshot = self.coordinator.data
         attributes: dict[str, Any] = {
             "reason": snapshot.reason,

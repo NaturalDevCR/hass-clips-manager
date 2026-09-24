@@ -23,6 +23,7 @@ class ClipAvailability:
     duration_seconds: float
     output_available: bool
     output_duration_seconds: float | None = None
+    relative_source_path: str = ""
 
     @classmethod
     def from_worker_clip(cls, clip: WorkerClip) -> ClipAvailability:
@@ -35,6 +36,7 @@ class ClipAvailability:
             duration_seconds=clip.duration_seconds,
             output_available=clip.output_available,
             output_duration_seconds=clip.output_duration_seconds,
+            relative_source_path=clip.relative_source_path,
         )
 
 
@@ -140,6 +142,14 @@ class SelectionService:
             tuple(clip.id for clip in candidates),
             request.dry_run,
             playback_mode=PlaybackMode(request.playback_mode),
+            clip_details={
+                clip.id: {
+                    "name": clip.relative_source_path.rsplit("/", 1)[-1] or clip.id,
+                    "duration_seconds": clip.output_duration_seconds,
+                    "relative_output_path": clip.relative_output_path,
+                }
+                for clip in candidates
+            },
         )
         if selected.clip_id is None:
             return SelectResponse(
@@ -158,11 +168,7 @@ class SelectionService:
             clip_id=chosen.id,
             relative_output_path=output_path,
             media_uri=self._media_uri_builder(output_path),
-            duration_seconds=(
-                chosen.output_duration_seconds
-                if chosen.output_duration_seconds is not None
-                else chosen.duration_seconds
-            ),
+            duration_seconds=chosen.output_duration_seconds,
             history_reset=selected.history_reset,
             output_is_stale=chosen.state != "ready",
         )

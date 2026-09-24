@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import ClipCard from "@/components/ClipCard.vue";
 import ClipDrawer from "@/components/ClipDrawer.vue";
 import BulkBar from "@/components/BulkBar.vue";
@@ -31,9 +31,20 @@ const error = ref("");
 const openClipId = ref<string | null>(null);
 const openClip = computed(() => clips.value.find((clip) => clip.id === openClipId.value) ?? null);
 
+let durationRefresh: ReturnType<typeof setTimeout> | undefined;
+let disposed = false;
+onUnmounted(() => {
+  disposed = true;
+  clearTimeout(durationRefresh);
+});
+
 async function reload(): Promise<void> {
+  clearTimeout(durationRefresh);
   try {
     await load();
+    if (!disposed && clips.value.some((clip) => clip.output_available && clip.output_duration_seconds == null)) {
+      durationRefresh = setTimeout(reload, 5000);
+    }
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : String(cause);
   }
@@ -56,11 +67,7 @@ onMounted(async () => {
   } catch {
     // Same as above: fall back to the default layout.
   }
-  try {
-    await load();
-  } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : String(cause);
-  }
+  await reload();
 });
 </script>
 
@@ -70,8 +77,8 @@ onMounted(async () => {
       class="sticky -top-5 z-10 -mx-5 -mt-5 flex flex-wrap items-center gap-2 border-b border-line bg-ground/95 px-5 py-3 backdrop-blur"
     >
       <label class="flex-1 min-w-52">
-        <span class="sr-only">Search clips by filename</span>
-        <input v-model="query" class="field" type="search" placeholder="Search filenames…" />
+        <span class="sr-only">Search clips by filename or ID</span>
+        <input v-model="query" class="field" type="search" placeholder="Search filenames or clip IDs…" />
       </label>
       <label>
         <span class="sr-only">Filter by collection</span>
@@ -93,7 +100,7 @@ onMounted(async () => {
         <span class="sr-only">Sort clips</span>
         <select v-model="sortKey" class="field">
           <option value="name">Name</option>
-          <option value="duration">Duration</option>
+          <option value="duration">Compiled duration</option>
           <option value="state">State</option>
         </select>
       </label>

@@ -282,6 +282,11 @@ def install_manager_routes(app: FastAPI, settings: WorkerSettings) -> None:
     def list_manager_clips(request: Request) -> list[dict[str, Any]]:
         if _valid_session(request) is None:
             raise HTTPException(status_code=401, detail="Library Manager session required")
+        rows = request.app.state.database.connection.execute(
+            "SELECT * FROM clips WHERE state <> 'deleted' AND output_available=1 "
+            "AND output_duration_seconds IS NULL"
+        ).fetchall()
+        request.app.state.output_durations.ensure_many(rows)
         return _clip_payloads(request.app.state.database)
 
     @app.get("/manager/clips/{clip_id}/source", include_in_schema=False)

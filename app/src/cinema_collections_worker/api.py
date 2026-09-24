@@ -41,6 +41,7 @@ from .jobs import JobProgress, JobRecord, JobService, JobStage, JobWorker
 from .library_manager import LibraryManager
 from .manager_web import install_manager_routes
 from .models import ClipRecord
+from .output_duration import OutputDurations
 from .paths import SafePathResolver
 from .queue import PersistentJobQueue
 from .repositories import (
@@ -53,7 +54,7 @@ from .repositories import (
 from .sanitization import sanitize_message
 from .settings import WorkerSettings
 
-WORKER_VERSION = "1.10.0"
+WORKER_VERSION = "1.10.1"
 API_VERSION = "1.0.0"
 MIN_CLIENT_VERSION = "1.0.0"
 MAX_CLIENT_VERSION = "1.x"
@@ -509,6 +510,7 @@ def create_app(settings: WorkerSettings) -> FastAPI:
     collections = CollectionRepository(database)
     profiles = ProfileRepository(database)
     queue = PersistentJobQueue(database)
+    output_durations = OutputDurations(database, resolver)
 
     @asynccontextmanager
     async def lifespan(running_app: FastAPI):
@@ -558,6 +560,7 @@ def create_app(settings: WorkerSettings) -> FastAPI:
         redoc_url=None,
         lifespan=lifespan,
     )
+    app.state.output_durations = output_durations
     app.state.settings = settings
     app.state.database = database
     app.state.resolver = resolver
@@ -802,7 +805,10 @@ def create_app(settings: WorkerSettings) -> FastAPI:
         ).fetchall()
         return ClipsPage.model_validate(
             _page(
-                [_live_clip(database, resolver, row).model_dump(mode="json") for row in rows],
+                [
+                    _live_clip(database, resolver, row).model_dump(mode="json")
+                    for row in output_durations.ensure_many(rows)
+                ],
                 page,
                 page_size,
             ).model_dump()
@@ -821,7 +827,7 @@ def create_app(settings: WorkerSettings) -> FastAPI:
         ).fetchone()
         if row is None:
             raise KeyError(clip_id)
-        return _live_clip(database, resolver, row)
+        return _live_clip(database, resolver, output_durations.ensure(row))
 
     @app.post(
         "/api/v1/scan",

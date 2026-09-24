@@ -18,11 +18,15 @@ export function useClips() {
     const rows = clips.value.filter((clip) => {
       if (collectionFilter.value && clip.collection_id !== collectionFilter.value) return false;
       if (stateFilter.value && clip.state !== stateFilter.value) return false;
-      if (needle && !sourceName(clip).toLowerCase().includes(needle)) return false;
+      if (
+        needle &&
+        !sourceName(clip).toLowerCase().includes(needle) &&
+        !clip.id.toLowerCase().includes(needle)
+      ) return false;
       return true;
     });
     if (sortKey.value === "duration") {
-      rows.sort((a, b) => a.duration_seconds - b.duration_seconds);
+      rows.sort((a, b) => (a.output_duration_seconds ?? Infinity) - (b.output_duration_seconds ?? Infinity));
     } else if (sortKey.value === "state") {
       rows.sort(
         (a, b) => a.state.localeCompare(b.state) || sourceName(a).localeCompare(sourceName(b)),

@@ -76,3 +76,12 @@ response_variable: next_clip
 ```
 
 Remove `dry_run` only after checking the returned URI. The service selects media; it does not play it.
+### Last selected video
+
+The **Last selected video** sensor stores the filename of the most recent clip
+returned by a real `select_next_clip` call. Its attributes include `clip_id`,
+`collection_id`, `duration_seconds` (compiled output only), `relative_output_path`,
+and `selected_at`. It updates immediately, survives Home Assistant restarts and
+history resets, and remains visible when the Worker is offline. Dry runs do not
+change it. This records selection for playback; it does not confirm that a media
+player actually started or completed playback.

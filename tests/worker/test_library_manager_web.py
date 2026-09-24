@@ -1128,3 +1128,91 @@ def test_manager_edit_route_404s_for_an_unknown_clip(tmp_path: Path) -> None:
     )
 
     assert rejected.status_code == 404
+
+
+def test_legacy_output_duration_is_measured_without_recompiling(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from cinema_collections_worker.probe import MediaProbeResult, ProbeClient
+
+    client = TestClient(_app(tmp_path))
+    _seed_collection(client)
+    clip_id = _seed_catalogued_clip(client)
+    output = tmp_path / "media/compiled/films/legacy.mp4"
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_bytes(b"compiled")
+    with client.app.state.database.connection:
+        client.app.state.database.connection.execute(
+            "UPDATE clips SET output_available=1, relative_output_path='films/legacy.mp4', "
+            "duration_seconds=130 WHERE id=?",
+            (clip_id,),
+        )
+
+    def probe(self, path):
+        assert path == output
+        return MediaProbeResult(valid=True, duration_seconds=144)
+
+    monkeypatch.setattr(ProbeClient, "probe", probe)
+    assert client.get("/manager/clips").json()[0]["output_duration_seconds"] == 144
+    payload = client.get(f"/api/v1/clips/{clip_id}", headers=_api_headers("duration")).json()
+    assert payload["duration_seconds"] == 130
+    assert payload["output_duration_seconds"] == 144
+    assert output.read_bytes() == b"compiled"
+
+
+def test_failed_output_probe_keeps_duration_unknown(tmp_path: Path, monkeypatch) -> None:
+    from cinema_collections_worker.probe import MediaProbeResult, ProbeClient
+
+    client = TestClient(_app(tmp_path))
+    _seed_collection(client)
+    clip_id = _seed_catalogued_clip(client)
+    output = tmp_path / "media/compiled/films/broken.mp4"
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_bytes(b"broken")
+    with client.app.state.database.connection:
+        client.app.state.database.connection.execute(
+            "UPDATE clips SET output_available=1, relative_output_path='films/broken.mp4', "
+            "duration_seconds=130 WHERE id=?",
+            (clip_id,),
+        )
+    monkeypatch.setattr(ProbeClient, "probe", lambda self, path: MediaProbeResult(valid=False))
+    payload = client.get(f"/api/v1/clips/{clip_id}", headers=_api_headers("failed-duration")).json()
+    assert payload["output_duration_seconds"] is None
+    assert payload["duration_seconds"] == 130
+
+
+def test_output_recovery_has_a_per_request_budget(tmp_path: Path, monkeypatch) -> None:
+    from cinema_collections_worker.output_duration import OutputDurations
+    from cinema_collections_worker.probe import MediaProbeResult, ProbeClient
+
+    client = TestClient(_app(tmp_path))
+    _seed_collection(client)
+    ids = [_seed_catalogued_clip(client, name) for name in ("one.mp4", "two.mp4")]
+    for identifier in ids:
+        path = tmp_path / f"media/compiled/films/{identifier}.mp4"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"output")
+        with client.app.state.database.connection:
+            client.app.state.database.connection.execute(
+                "UPDATE clips SET output_available=1 WHERE id=?",
+                (identifier,),
+            )
+    now = [100.0]
+    monkeypatch.setattr("cinema_collections_worker.output_duration.time.monotonic", lambda: now[0])
+
+    def probe(self, path):
+        now[0] += 3
+        return MediaProbeResult(valid=True, duration_seconds=144)
+
+    monkeypatch.setattr(ProbeClient, "probe", probe)
+    recovery = OutputDurations(client.app.state.database, client.app.state.resolver)
+    rows = client.app.state.database.connection.execute(
+        "SELECT * FROM clips ORDER BY id"
+    ).fetchall()
+    result = recovery.ensure_many(rows)
+    assert [row["output_duration_seconds"] for row in result] == [144, None]
+    rows = client.app.state.database.connection.execute(
+        "SELECT * FROM clips ORDER BY id"
+    ).fetchall()
+    result = recovery.ensure_many(rows)
+    assert [row["output_duration_seconds"] for row in result] == [144, 144]

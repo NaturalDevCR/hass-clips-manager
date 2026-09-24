@@ -50,6 +50,12 @@ describe("useClips", () => {
     expect(store.filtered.value.map((entry) => entry.id)).toEqual(["b"]);
   });
 
+  it("finds a clip by partial ID regardless of case", () => {
+    store.clips.value = [clip({ id: "F95F15DA-5D57", relative_source_path: "regular/movie.mp4" })];
+    store.query.value = " f95f15da ";
+    expect(store.filtered.value.map((entry) => entry.id)).toEqual(["F95F15DA-5D57"]);
+  });
+
   it("filters by collection and state together", () => {
     store.collectionFilter.value = "regular";
     store.stateFilter.value = "failed";
@@ -57,6 +63,11 @@ describe("useClips", () => {
   });
 
   it("sorts by duration when asked", () => {
+    store.clips.value = [
+      clip({ id: "a", duration_seconds: 10, output_duration_seconds: 30 }),
+      clip({ id: "b", duration_seconds: 5 }),
+      clip({ id: "c", duration_seconds: 100, output_duration_seconds: 20 }),
+    ];
     store.sortKey.value = "duration";
     expect(store.filtered.value.map((entry) => entry.id)).toEqual(["c", "a", "b"]);
   });

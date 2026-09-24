@@ -30,7 +30,8 @@ defineEmits<{ open: [Clip]; toggle: [string] }>();
     <p v-if="clip.failed_reason" class="text-xs text-danger">{{ clip.failed_reason }}</p>
     <div class="mt-auto flex flex-wrap items-center gap-2 text-xs text-muted">
       <StateBadge :state="clip.state" />
-      <span>{{ formatDuration(clip.duration_seconds) }}</span>
+      <span>Source: {{ formatDuration(clip.duration_seconds) }}
+            <span class="block">Compiled: {{ clip.output_available && clip.output_duration_seconds != null ? formatDuration(clip.output_duration_seconds) : "—" }}</span></span>
       <span v-if="clip.output_available" class="text-ok" :title="clip.relative_output_path">
         Output ready
       </span>

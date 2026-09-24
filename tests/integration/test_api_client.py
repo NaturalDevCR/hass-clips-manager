@@ -152,6 +152,7 @@ async def test_list_clips_parses_paginated_worker_availability() -> None:
             state="ready",
             relative_output_path="films/output.mp4",
             duration_seconds=42.5,
+            relative_source_path="films/source.mp4",
             output_available=True,
         ),
     )

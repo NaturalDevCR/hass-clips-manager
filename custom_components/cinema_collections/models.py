@@ -37,6 +37,7 @@ class WorkerClip:
     duration_seconds: float
     output_available: bool
     output_duration_seconds: float | None = None
+    relative_source_path: str = ""
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any]) -> WorkerClip:
@@ -78,6 +79,7 @@ class WorkerClip:
                 float(output_duration_seconds) if output_duration_seconds is not None else None
             ),
             output_available=output_available,
+            relative_source_path=str(payload.get("relative_source_path") or ""),
         )
 
 

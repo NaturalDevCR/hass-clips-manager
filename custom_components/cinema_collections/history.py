@@ -61,6 +61,7 @@ class PlaybackHistoryStore:
         )
         self._lock = asyncio.Lock()
         self._data: dict[str, dict[str, dict[str, Any]]] = {"collections": {}}
+        self._last_selection: dict[str, Any] | None = None
         self._initialized = False
         self._cancel_daily_reset: Callable[[], None] | None = None
 
@@ -71,6 +72,8 @@ class PlaybackHistoryStore:
                 return ResetResult((), self._local_now())
             loaded = await self._store.async_load()
             self._data = self._normalize(loaded)
+            if isinstance(loaded, dict) and isinstance(loaded.get("last_selection"), dict):
+                self._last_selection = dict(loaded["last_selection"])
             self._initialized = True
             now = self._local_now()
             reset_ids = self._reconcile(now) if reconcile else ()
@@ -103,6 +106,7 @@ class PlaybackHistoryStore:
         dry_run: bool,
         *,
         playback_mode: PlaybackMode = PlaybackMode.RANDOM,
+        clip_details: Mapping[str, Mapping[str, Any]] | None = None,
     ) -> HistorySelection:
         """Select an eligible clip and persist its claim before returning it."""
         await self.async_setup(reconcile=not dry_run)
@@ -156,6 +160,12 @@ class PlaybackHistoryStore:
             if dry_run:
                 return HistorySelection(collection_id, clip_id, round_number, history_reset)
 
+            self._last_selection = {
+                **dict((clip_details or {}).get(clip_id, {})),
+                "clip_id": clip_id,
+                "collection_id": collection_id,
+                "selected_at": now.isoformat(),
+            }
             collections[collection_id] = {
                 "period_start": self._period_start(now),
                 "round_number": round_number,
@@ -196,6 +206,10 @@ class PlaybackHistoryStore:
             if reset_ids:
                 await self._store.async_save(self._serialized())
             return ResetResult(reset_ids, local_now)
+
+    def last_selection(self) -> dict[str, Any] | None:
+        """Return the most recent real selection, independent of playback rounds."""
+        return dict(self._last_selection) if self._last_selection is not None else None
 
     def snapshot(self) -> Mapping[str, Mapping[str, Any]]:
         """Return a fresh per-collection history summary without mutating state.
@@ -319,8 +333,9 @@ class PlaybackHistoryStore:
 
     def _serialized(self) -> dict[str, Any]:
         return {
+            "last_selection": self._last_selection,
             "collections": {
                 collection_id: dict(record)
                 for collection_id, record in sorted(self._data["collections"].items())
-            }
+            },
         }

@@ -50,7 +50,8 @@ defineEmits<{ open: [Clip]; toggle: [string] }>();
             {{ clip.output_available ? "Ready" : "—" }}
           </td>
           <td class="px-3 py-2 whitespace-nowrap text-muted">
-            {{ formatDuration(clip.duration_seconds) }}
+            Source: {{ formatDuration(clip.duration_seconds) }}
+            <span class="block">Compiled: {{ clip.output_available && clip.output_duration_seconds != null ? formatDuration(clip.output_duration_seconds) : "—" }}</span>
           </td>
           <td class="max-w-[12rem] truncate px-3 py-2 text-muted">{{ clip.tags.join(", ") }}</td>
           <td class="px-3 py-2">
