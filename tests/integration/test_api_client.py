@@ -158,6 +158,56 @@ async def test_list_clips_parses_paginated_worker_availability() -> None:
     )
 
 
+def test_worker_clip_parses_compiled_timing_metadata():
+    payload = {
+        "id": "89d7b8a3-96aa-4ec4-bfdc-69c48af85935",
+        "collection_id": "films",
+        "state": "ready",
+        "relative_source_path": "films/source.mp4",
+        "relative_output_path": "films/output.mp4",
+        "duration_seconds": 42.5,
+        "output_duration_seconds": 200.25,
+        "output_available": True,
+        "content_duration_seconds": 180.0,
+        "lead_in_duration_seconds": 10.125,
+        "tail_out_duration_seconds": 10.125,
+        "content_start_offset_seconds": 10.125,
+        "content_end_offset_seconds": 190.125,
+        "metadata": {},
+    }
+
+    clip = WorkerClip.from_dict(payload)
+
+    assert clip.output_duration_seconds == 200.25
+    assert clip.content_duration_seconds == 180.0
+    assert clip.lead_in_duration_seconds == 10.125
+    assert clip.tail_out_duration_seconds == 10.125
+    assert clip.content_start_offset_seconds == 10.125
+    assert clip.content_end_offset_seconds == 190.125
+
+
+def test_worker_clip_rejects_partial_or_out_of_range_timing_metadata():
+    payload = {
+        "id": "89d7b8a3-96aa-4ec4-bfdc-69c48af85935",
+        "collection_id": "films",
+        "state": "ready",
+        "relative_source_path": "films/source.mp4",
+        "relative_output_path": "films/output.mp4",
+        "duration_seconds": 42.5,
+        "output_duration_seconds": 10.0,
+        "output_available": True,
+        "content_duration_seconds": 8.0,
+        "lead_in_duration_seconds": 1.0,
+        "tail_out_duration_seconds": 1.0,
+        "content_start_offset_seconds": 4.0,
+        "content_end_offset_seconds": 2.0,
+        "metadata": {},
+    }
+
+    with pytest.raises(ValueError, match="timing"):
+        WorkerClip.from_dict(payload)
+
+
 @pytest.mark.asyncio
 async def test_list_profiles_parses_paginated_worker_profiles() -> None:
     """The collection subentry flow's profile picker depends on this shape."""

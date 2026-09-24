@@ -4,10 +4,34 @@
 import json
 from pathlib import Path
 
-from cinema_collections_worker.jobs import CompileRequest, JobState, JobWorker
+from cinema_collections_worker.jobs import (
+    CompileRequest,
+    JobRecord,
+    JobState,
+    JobWorker,
+    _composed_duration_seconds,
+)
 from cinema_collections_worker.probe import MediaProbeResult
 from cinema_collections_worker.profile_validation import ProcessingProfile
 from test_queue import _configured_service
+
+
+def test_compile_timeout_budget_includes_both_margin_durations():
+    job = JobRecord(
+        id="job-timeout-margins",
+        collection_id="films",
+        clip_id="clip-timeout-margins",
+        source_relative_path="films/source.mp4",
+        output_relative_path="films/result.mp4",
+        source_fingerprint="source",
+        profile_fingerprint="profile",
+        profile_settings=ProcessingProfile().model_dump(mode="json"),
+        duration_seconds=60,
+        lead_in_duration_seconds=0.75,
+        tail_out_duration_seconds=1.25,
+    )
+
+    assert _composed_duration_seconds(job, ProcessingProfile()) == 62.0
 
 
 class _FinishedProcess:
@@ -76,8 +100,8 @@ def test_long_clip_scales_every_phase_allowance_beyond_the_floor(tmp_path, monke
     result = worker.run_once()
 
     assert result is not None and result.job.state is JobState.SUCCEEDED
-    # ceil(718 / 60) = 12 minutes at the default 120 s per minute.
-    assert timeouts and all(timeout == 1440 for timeout in timeouts)
+    # Source analysis uses 12 minutes; the 722-second compiled timeline uses 13.
+    assert timeouts == [1440, 1560, 1560, 1560]
 
 
 def test_segment_analysis_uses_the_segments_own_duration(tmp_path, monkeypatch):

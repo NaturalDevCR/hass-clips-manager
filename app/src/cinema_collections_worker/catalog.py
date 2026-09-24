@@ -57,11 +57,19 @@ def file_fingerprint(path: Path) -> str:
 
 class CatalogService:
     def __init__(
-        self, db: Database, resolver: SafePathResolver, probe_client: _Probe | None = None
+        self,
+        db: Database,
+        resolver: SafePathResolver,
+        probe_client: _Probe | None = None,
+        *,
+        lead_in_duration: float = 2.0,
+        tail_out_duration: float = 2.0,
     ) -> None:
         self.db = db
         self.resolver = resolver
         self.probe_client = probe_client or ProbeClient()
+        self.lead_in_duration = lead_in_duration
+        self.tail_out_duration = tail_out_duration
 
     @staticmethod
     def _fingerprint(path: Path) -> str:
@@ -103,7 +111,14 @@ class CatalogService:
             else fingerprint(profile.outro_reference)
         )
         assets = AssetFingerprints(intro_fingerprint=intro, outro_fingerprint=outro)
-        return profile, profile_fingerprint(profile, assets)
+        return profile, profile_fingerprint(
+            profile,
+            assets,
+            {
+                "lead_in_duration": self.lead_in_duration,
+                "tail_out_duration": self.tail_out_duration,
+            },
+        )
 
     def scan(self, collection_ids: set[str] | None = None) -> ScanSummary:
         selected = collection_ids

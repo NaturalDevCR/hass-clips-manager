@@ -1,5 +1,5 @@
 name: Cinema Collections Worker
-version: 1.10.1
+version: 1.11.0
 slug: cinema_collections_worker
 description: Safe media catalog, compilation queue, and Ingress library manager
 url: https://github.com/NaturalDevCR/hass-clips-manager
@@ -22,6 +22,8 @@ options:
   source_root: /media/cinema-collections/source
   compiled_root: /media/cinema-collections/compiled
   disk_reserve_bytes: 1073741824
+  lead_in_duration: 2.0
+  tail_out_duration: 2.0
 schema:
   bearer_secret: password
   bind_host: str
@@ -29,3 +31,5 @@ schema:
   source_root: str
   compiled_root: str
   disk_reserve_bytes: int(0,)
+  lead_in_duration: float(0,)
+  tail_out_duration: float(0,)

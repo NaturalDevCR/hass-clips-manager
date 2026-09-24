@@ -36,6 +36,20 @@ select_next_clip:
         description: Media Source URI for the selected clip.
       media_content_type:
         description: Media content type, always video.
+      duration_seconds:
+        description: Legacy alias for the compiled file duration, in seconds, or null when unavailable.
+      duration:
+        description: Actual total compiled file duration in seconds, including configured black margins; null when unavailable.
+      content_duration:
+        description: Duration of the source content in seconds, excluding black margins; null when unavailable.
+      lead_in_duration:
+        description: Initial black and silent margin in seconds; zero for legacy files without timing metadata.
+      tail_out_duration:
+        description: Final black and silent margin in seconds; zero for legacy files without timing metadata.
+      content_start_offset:
+        description: Offset in seconds from file start to the first source-content frame; zero for legacy files.
+      content_end_offset:
+        description: Offset in seconds from file start to the first final-black frame, or file end when no tail exists; file duration for legacy files.
 reset_history:
   name: Reset playback history
   description: Reset no-repeat history globally or for one collection.

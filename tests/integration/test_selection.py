@@ -46,6 +46,11 @@ def clip(
     output_available: bool = True,
     output_path: str | None = None,
     output_duration: float | None = None,
+    content_duration: float | None = None,
+    lead_in: float | None = None,
+    tail_out: float | None = None,
+    content_start: float | None = None,
+    content_end: float | None = None,
 ) -> ClipAvailability:
     """Create a full Worker clip availability record."""
     return ClipAvailability(
@@ -56,6 +61,11 @@ def clip(
         duration_seconds=42.5,
         output_available=output_available,
         output_duration_seconds=output_duration,
+        content_duration_seconds=content_duration,
+        lead_in_duration_seconds=lead_in,
+        tail_out_duration_seconds=tail_out,
+        content_start_offset_seconds=content_start,
+        content_end_offset_seconds=content_end,
     )
 
 
@@ -114,6 +124,41 @@ async def test_selection_reports_compiled_duration_when_worker_has_it(hass: obje
     response = await service.async_select(SelectRequest(collection_id="films"))
 
     assert response.duration_seconds == 37.25
+    assert response.duration == 37.25
+    assert response.content_duration == 37.25
+    assert response.lead_in_duration == 0
+    assert response.tail_out_duration == 0
+    assert response.content_start_offset == 0
+    assert response.content_end_offset == 37.25
+
+
+@pytest.mark.asyncio
+async def test_selection_returns_worker_content_boundaries(hass: object) -> None:
+    service = await make_service(
+        hass,
+        (
+            clip(
+                "timed",
+                output_duration=200.25,
+                content_duration=180.0,
+                lead_in=10.125,
+                tail_out=10.125,
+                content_start=10.125,
+                content_end=190.125,
+            ),
+        ),
+        "selection-timing-metadata",
+    )
+
+    response = await service.async_select(SelectRequest(collection_id="films"))
+
+    assert response.duration_seconds == 200.25
+    assert response.duration == 200.25
+    assert response.content_duration == 180.0
+    assert response.lead_in_duration == 10.125
+    assert response.tail_out_duration == 10.125
+    assert response.content_start_offset == 10.125
+    assert response.content_end_offset == 190.125
 
 
 @pytest.mark.asyncio
@@ -248,6 +293,8 @@ async def test_unknown_output_duration_never_uses_source(hass: object) -> None:
     service = await make_service(hass, (clip("legacy"),), "unknown-output-duration")
     response = await service.async_select(SelectRequest(collection_id="films"))
     assert response.duration_seconds is None
+    assert response.duration is None
+    assert response.content_start_offset is None
 
 
 @pytest.mark.asyncio

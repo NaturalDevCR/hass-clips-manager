@@ -26,7 +26,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .catalog import CatalogService, file_fingerprint
 from .database import Database
-from .ffmpeg import FfmpegCommandBuilder
+from .ffmpeg import FfmpegCommandBuilder, frame_aligned_duration
 from .models import ClipState
 from .paths import RootKey, SafePathResolver, validate_collection_id, validate_relative_path
 from .probe import MediaProbeResult, ProbeClient
@@ -104,6 +104,8 @@ class JobRecord(BaseModel):
     duration_seconds: float = Field(ge=0)
     intro_duration_seconds: float = Field(default=0, ge=0)
     outro_duration_seconds: float = Field(default=0, ge=0)
+    lead_in_duration_seconds: float = Field(default=2.0, ge=0, allow_inf_nan=False)
+    tail_out_duration_seconds: float = Field(default=2.0, ge=0, allow_inf_nan=False)
     has_audio: bool = True
     intro_has_audio: bool = True
     outro_has_audio: bool = True
@@ -180,6 +182,8 @@ def _composed_duration_seconds(job: JobRecord, profile: ProcessingProfile) -> fl
         total += job.intro_duration_seconds - transition
     if job.outro_path is not None:
         total += job.outro_duration_seconds - transition
+    total += frame_aligned_duration(job.lead_in_duration_seconds, profile.video.fps)
+    total += frame_aligned_duration(job.tail_out_duration_seconds, profile.video.fps)
     return max(0.0, total)
 
 
@@ -216,12 +220,16 @@ class JobService:
         disk_reserve_bytes: int = 1_073_741_824,
         queue: PersistentJobQueue | None = None,
         catalog: CatalogService | None = None,
+        lead_in_duration: float = 2.0,
+        tail_out_duration: float = 2.0,
     ) -> None:
         self.db = db
         self.resolver = resolver
         self.disk_reserve_bytes = disk_reserve_bytes
         self.queue = queue or PersistentJobQueue(db)
         self.catalog = catalog
+        self.lead_in_duration = lead_in_duration
+        self.tail_out_duration = tail_out_duration
 
     @staticmethod
     def available_disk_bytes(path: Path) -> int:
@@ -259,7 +267,12 @@ class JobService:
             )
         )
         return profile.model_dump(mode="json"), profile_fingerprint(
-            profile, {"intro_fingerprint": intro, "outro_fingerprint": outro}
+            profile,
+            {"intro_fingerprint": intro, "outro_fingerprint": outro},
+            {
+                "lead_in_duration": self.lead_in_duration,
+                "tail_out_duration": self.tail_out_duration,
+            },
         )
 
     def _eligible_clips(self, request: CompileRequest) -> list[Any]:
@@ -340,6 +353,8 @@ class JobService:
                 profile_fingerprint=profile_fingerprint_value,
                 profile_settings=profile_settings,
                 duration_seconds=float(clip["duration_seconds"]),
+                lead_in_duration_seconds=self.lead_in_duration,
+                tail_out_duration_seconds=self.tail_out_duration,
                 has_audio=bool(metadata.get("has_audio", True)),
                 max_attempts=request.max_attempts,
             )
@@ -1033,6 +1048,7 @@ class JobWorker:
                     job, JobState.FAILED, "temporary output validation failed", retry=retry
                 )
                 return JobRunResult(job=finished, retry_scheduled=retry)
+            timing_metadata = self._compiled_timing_metadata(runtime_job, profile, probe)
             final = self.resolver.resolve(RootKey.COMPILED.value, job.output_relative_path)
             self.queue.update(
                 job.model_copy(
@@ -1053,6 +1069,7 @@ class JobWorker:
                     "source_fingerprint": job.source_fingerprint,
                     "profile_fingerprint": job.profile_fingerprint,
                     "output_fingerprint": self._file_fingerprint(final),
+                    **timing_metadata,
                 }
             )
             with self.db.transaction():
@@ -1082,7 +1099,7 @@ class JobWorker:
 
     @staticmethod
     def _valid_output(probe: MediaProbeResult, profile: ProcessingProfile) -> bool:
-        return bool(
+        valid_streams = bool(
             probe.valid
             and probe.duration_seconds > 0
             and probe.width == profile.video.width
@@ -1091,3 +1108,33 @@ class JobWorker:
             and abs(probe.frame_rate - profile.video.fps) < 0.05
             and probe.has_audio
         )
+        if not valid_streams:
+            return False
+        if probe.video_duration_seconds is not None and probe.audio_duration_seconds is not None:
+            sync_tolerance = max(0.1, 1 / profile.video.fps)
+            if abs(probe.video_duration_seconds - probe.audio_duration_seconds) > sync_tolerance:
+                return False
+        return True
+
+    @staticmethod
+    def _compiled_timing_metadata(
+        job: JobRecord, profile: ProcessingProfile, probe: MediaProbeResult
+    ) -> dict[str, float]:
+        """Measure content boundaries against the probed, encoded output timeline."""
+
+        duration = probe.duration_seconds
+        video_duration = probe.video_duration_seconds or duration
+        lead_in = frame_aligned_duration(job.lead_in_duration_seconds, profile.video.fps)
+        requested_tail = frame_aligned_duration(job.tail_out_duration_seconds, profile.video.fps)
+        content_start = lead_in
+        content_end = video_duration - requested_tail if requested_tail > 0 else duration
+        if content_end <= content_start or content_end > duration:
+            raise ValueError("compiled output timing metadata is outside the final file")
+        tail_out = duration - content_end
+        return {
+            "content_duration_seconds": content_end - content_start,
+            "lead_in_duration_seconds": lead_in,
+            "tail_out_duration_seconds": tail_out,
+            "content_start_offset_seconds": content_start,
+            "content_end_offset_seconds": content_end,
+        }

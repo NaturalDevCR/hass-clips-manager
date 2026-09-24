@@ -21,6 +21,13 @@ Hardware acceleration is disabled by default. Processing profiles are typed
 settings, not shell commands or raw FFmpeg filters. Start with the Compatibility
 4K Loudness Profile, then create a named profile for intentional changes.
 
+The Worker add-on's global options `lead_in_duration` and `tail_out_duration`
+control black and silent padding around every compiled clip. Both default to
+`2.0` seconds and accept non-negative fractional seconds; set either to `0` to
+disable that margin. Changing a value invalidates affected compiled-cache
+entries so the next compile regenerates their files. Padding is added within the
+compiled file and does not trim or fade the source content.
+
 ## Pairing and global options
 
 The integration config flow stores three values: `endpoint` (**Worker
@@ -93,6 +100,15 @@ the saved custom list. These overrides apply only to the current call and share
 the same collection history. To start from the beginning, explicitly reset that
 collection's history first. Two automations selecting from the same collection
 therefore advance the same round.
+
+The service response retains `duration_seconds` and adds `duration`,
+`content_duration`, `lead_in_duration`, `tail_out_duration`,
+`content_start_offset`, and `content_end_offset` in seconds. Automations can use
+the content offsets to time projector visibility around Cast's initial controls
+and final waiting screen. When an older Worker omits margin metadata, known
+compiled files are reported with zero margins and content bounds covering the
+whole file. Cinema Collections supplies the media and timing data; Home
+Assistant controls the projector.
 
 Only clips with available compiled output participate. Ready outputs take
 precedence; stale outputs remain the existing fallback when none are ready.

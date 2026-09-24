@@ -129,5 +129,26 @@ refreshes continue recovery when a library needs more time. Home Assistant's `se
 compiled duration and returns `null` if it cannot be measured. Automations must
 handle this unknown value rather than substitute the source duration.
 
+The Worker also reports optional `content_duration_seconds`,
+`lead_in_duration_seconds`, `tail_out_duration_seconds`,
+`content_start_offset_seconds`, and `content_end_offset_seconds` catalog fields.
+These values are measured from the generated file and are expressed in seconds.
+For a legacy output with no stored margin metadata, the API reports zero margins
+and uses the full measured file duration as its content bounds. If the output
+duration is unknown, timing fields remain unavailable.
+
+The Home Assistant `select_next_clip` service preserves the legacy
+`duration_seconds` response and adds `duration`, `content_duration`,
+`lead_in_duration`, `tail_out_duration`, `content_start_offset`, and
+`content_end_offset`, all in seconds. `duration` is the full compiled file;
+`content_start_offset` and `content_end_offset` mark the interval containing
+the original content. These optional response fields are `null` when the file
+duration is unknown. Older Worker responses remain supported and are interpreted
+as zero-margin files when their compiled duration is known.
+
+Cinema Collections only prepares and describes the compiled file. Home
+Assistant automations remain responsible for coordinating the projector and
+showing or hiding the image using the content offsets.
+
 The Library Manager labels source and compiled durations separately and supports
 searching by filename or a complete/partial clip ID, ignoring letter case.

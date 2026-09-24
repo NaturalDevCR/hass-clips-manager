@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import math
 import shutil
+import struct
 import subprocess
 from pathlib import Path
 
@@ -11,6 +13,7 @@ import pytest
 from cinema_collections_worker.database import Database
 from cinema_collections_worker.jobs import CompileRequest, JobState, JobWorker
 from cinema_collections_worker.paths import RootKey, SafePathResolver
+from cinema_collections_worker.probe import ProbeClient
 from cinema_collections_worker.profile_validation import ProcessingProfile
 
 pytestmark = pytest.mark.skipif(
@@ -55,6 +58,63 @@ def _make_generated_fixture(path: Path, rate: int = 10, seconds: int = 1) -> Non
         capture_output=True,
         text=True,
     )
+
+
+def _frame_luma(path: Path, second: float) -> float:
+    result = subprocess.run(
+        [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            str(path),
+            "-ss",
+            str(second),
+            "-frames:v",
+            "1",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "gray",
+            "-",
+        ],
+        check=True,
+        capture_output=True,
+    )
+    assert result.stdout
+    return sum(result.stdout) / len(result.stdout)
+
+
+def _audio_rms(path: Path, second: float) -> float:
+    result = subprocess.run(
+        [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            str(path),
+            "-ss",
+            str(second),
+            "-t",
+            "0.1",
+            "-map",
+            "0:a:0",
+            "-ac",
+            "1",
+            "-ar",
+            "48000",
+            "-f",
+            "s16le",
+            "-",
+        ],
+        check=True,
+        capture_output=True,
+    )
+    samples = struct.unpack(f"<{len(result.stdout) // 2}h", result.stdout)
+    assert samples
+    return math.sqrt(sum(sample * sample for sample in samples) / len(samples))
 
 
 def test_generated_fixture_compiles_to_an_atomic_ready_output_in_temp_media_roots(
@@ -124,6 +184,27 @@ def test_generated_fixture_compiles_to_an_atomic_ready_output_in_temp_media_root
     assert source.is_file()
     assert not list(output.parent.glob("*.publishing"))
     assert not list(resolver.roots[RootKey.TEMP].iterdir())
+    row = database.connection.execute(
+        "SELECT output_duration_seconds, metadata FROM clips WHERE id=?",
+        ("00000000-0000-0000-0000-000000000016",),
+    ).fetchone()
+    metadata = json.loads(row["metadata"])
+    probe = ProbeClient().probe(output)
+    assert probe.valid
+    assert row["output_duration_seconds"] == pytest.approx(probe.duration_seconds)
+    assert metadata["lead_in_duration_seconds"] == 2.0
+    assert metadata["content_start_offset_seconds"] == 2.0
+    assert metadata["content_duration_seconds"] == pytest.approx(1.0, abs=0.1)
+    assert metadata["content_end_offset_seconds"] == pytest.approx(3.0, abs=0.1)
+    assert metadata["tail_out_duration_seconds"] == pytest.approx(
+        probe.duration_seconds - metadata["content_end_offset_seconds"]
+    )
+    assert _frame_luma(output, 0.5) < 8
+    assert _frame_luma(output, 2.5) > 8
+    assert _frame_luma(output, 4.5) < 8
+    assert _audio_rms(output, 0.5) < 30
+    assert _audio_rms(output, 2.5) > 30
+    assert _audio_rms(output, 4.5) < 30
 
 
 def test_intro_and_outro_at_a_different_frame_rate_still_compile(tmp_path: Path) -> None:

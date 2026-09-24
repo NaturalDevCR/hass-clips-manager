@@ -206,6 +206,12 @@ async def async_select_next_clip(
         "media_content_id": response.media_uri,
         "media_content_type": "video",
         "duration_seconds": response.duration_seconds,
+        "duration": response.duration,
+        "content_duration": response.content_duration,
+        "lead_in_duration": response.lead_in_duration,
+        "tail_out_duration": response.tail_out_duration,
+        "content_start_offset": response.content_start_offset,
+        "content_end_offset": response.content_end_offset,
         "history_reset": response.history_reset,
         "output_is_stale": response.output_is_stale,
     }

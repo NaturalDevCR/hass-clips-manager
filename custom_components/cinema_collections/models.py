@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -38,6 +39,11 @@ class WorkerClip:
     output_available: bool
     output_duration_seconds: float | None = None
     relative_source_path: str = ""
+    content_duration_seconds: float | None = None
+    lead_in_duration_seconds: float | None = None
+    tail_out_duration_seconds: float | None = None
+    content_start_offset_seconds: float | None = None
+    content_end_offset_seconds: float | None = None
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any]) -> WorkerClip:
@@ -66,6 +72,57 @@ class WorkerClip:
             raise WorkerContractError(
                 "Worker response field 'duration_seconds' must be a non-negative number"
             )
+        timing_names = (
+            "content_duration_seconds",
+            "lead_in_duration_seconds",
+            "tail_out_duration_seconds",
+            "content_start_offset_seconds",
+            "content_end_offset_seconds",
+        )
+        timing: dict[str, float | None] = {}
+        for name in timing_names:
+            value = payload.get(name)
+            if value is not None and (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+                or value < 0
+            ):
+                raise WorkerContractError(
+                    f"Worker response field {name!r} must be a finite non-negative number or null"
+                )
+            timing[name] = float(value) if value is not None else None
+        present_timing = [value is not None for value in timing.values()]
+        if any(present_timing):
+            output_duration = (
+                float(output_duration_seconds) if output_duration_seconds is not None else None
+            )
+            if not all(present_timing) or output_duration is None:
+                raise WorkerContractError("Worker clip timing metadata must be complete")
+            content_duration = timing["content_duration_seconds"]
+            lead_in = timing["lead_in_duration_seconds"]
+            tail_out = timing["tail_out_duration_seconds"]
+            content_start = timing["content_start_offset_seconds"]
+            content_end = timing["content_end_offset_seconds"]
+            if any(
+                value is None
+                for value in (content_duration, lead_in, tail_out, content_start, content_end)
+            ):
+                raise WorkerContractError("Worker clip timing metadata must be complete")
+            assert content_duration is not None
+            assert lead_in is not None
+            assert tail_out is not None
+            assert content_start is not None
+            assert content_end is not None
+            tolerance = 0.05
+            if (
+                content_start > content_end
+                or content_end > output_duration + tolerance
+                or abs(content_start - lead_in) > tolerance
+                or abs(content_end - content_start - content_duration) > tolerance
+                or abs(output_duration - content_end - tail_out) > tolerance
+            ):
+                raise WorkerContractError("Worker clip timing metadata is inconsistent")
         output_available = payload.get("output_available")
         if not isinstance(output_available, bool):
             raise WorkerContractError("Worker response field 'output_available' must be boolean")
@@ -80,6 +137,7 @@ class WorkerClip:
             ),
             output_available=output_available,
             relative_source_path=str(payload.get("relative_source_path") or ""),
+            **timing,
         )
 
 

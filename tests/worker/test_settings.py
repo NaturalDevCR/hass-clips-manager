@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 from cinema_collections_worker.paths import RootKey
 from cinema_collections_worker.settings import HardwareAcceleration, Settings, WorkerMode
+from pydantic import ValidationError
 
 _VALID_SECRET = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFG"
 
@@ -14,10 +15,44 @@ def test_load_defaults_and_persistent_paths(tmp_path: Path) -> None:
     assert settings.mode is WorkerMode.APP
     assert settings.bind_host == "127.0.0.1"
     assert settings.hardware_acceleration is HardwareAcceleration.NONE
+    assert settings.lead_in_duration == 2.0
+    assert settings.tail_out_duration == 2.0
     assert settings.database_path == Path("/data/worker.sqlite3")
     assert settings.log_dir == Path("/data/logs")
     assert settings.temp_dir == Path("/data/tmp")
     assert RootKey.TEMP in settings.roots
+
+
+def test_margin_durations_accept_fractional_seconds_and_zero(tmp_path: Path) -> None:
+    options = tmp_path / "options.yaml"
+    options.write_text(
+        f"bearer_secret: {_VALID_SECRET}\nlead_in_duration: 0.75\ntail_out_duration: 0\n",
+        encoding="utf-8",
+    )
+
+    settings = Settings.load(options)
+
+    assert settings.lead_in_duration == 0.75
+    assert settings.tail_out_duration == 0.0
+
+
+@pytest.mark.parametrize("margin", ["-0.1", ".nan", ".inf"])
+def test_invalid_margin_durations_are_rejected(tmp_path: Path, margin: str) -> None:
+    options = tmp_path / "options.yaml"
+    options.write_text(
+        f"bearer_secret: {_VALID_SECRET}\nlead_in_duration: {margin}\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="invalid Worker options") as error:
+        Settings.load(options)
+
+    validation_error = error.value.__cause__
+    assert isinstance(validation_error, ValidationError)
+    assert any(
+        issue["type"] in {"greater_than_equal", "finite_number"}
+        for issue in validation_error.errors()
+    )
 
 
 def test_bearer_secret_is_required(tmp_path: Path) -> None:

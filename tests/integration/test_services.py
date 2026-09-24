@@ -58,6 +58,12 @@ async def test_select_next_clip_returns_home_assistant_media_content_response(ha
         ),
         "media_content_type": "video",
         "duration_seconds": None,
+        "duration": None,
+        "content_duration": None,
+        "lead_in_duration": None,
+        "tail_out_duration": None,
+        "content_start_offset": None,
+        "content_end_offset": None,
         "history_reset": False,
         "output_is_stale": False,
     }

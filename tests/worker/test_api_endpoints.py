@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import Path
 
+import pytest
 from cinema_collections_worker.api import create_app
 from cinema_collections_worker.paths import RootKey
 from cinema_collections_worker.profile_validation import ProcessingProfile
@@ -285,6 +286,60 @@ def test_clip_lookup_downgrades_a_missing_compiled_output_live(tmp_path: Path) -
     assert found.json()["output_available"] is False
     assert found.json()["state"] == "stale"
     assert tuple(persisted) == ("stale", 0)
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {},
+        {
+            "content_duration_seconds": 1.0,
+            "lead_in_duration_seconds": 1.0,
+            "tail_out_duration_seconds": 1.0,
+            "content_start_offset_seconds": 5.0,
+            "content_end_offset_seconds": 2.0,
+        },
+    ],
+    ids=["legacy-output", "out-of-range-timing"],
+)
+def test_clip_timing_defaults_legacy_and_invalid_metadata_to_full_output(
+    tmp_path: Path, metadata: dict[str, float]
+) -> None:
+    client = _client(tmp_path)
+    _create_profile_and_collection(client)
+    clip_id = "00000000-0000-0000-0000-000000000092"
+    with client.app.state.database.connection:
+        client.app.state.database.connection.execute(
+            "INSERT INTO clips(id,collection_id,state,relative_source_path,relative_output_path,"
+            "duration_seconds,output_available,metadata,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
+            (
+                clip_id,
+                "films",
+                "ready",
+                "films/in.mp4",
+                "films/timed.mp4",
+                3.0,
+                1,
+                json.dumps(metadata),
+                datetime.now(UTC).isoformat(),
+            ),
+        )
+        client.app.state.database.connection.execute(
+            "UPDATE clips SET output_duration_seconds=7.25 WHERE id=?", (clip_id,)
+        )
+    output = client.app.state.resolver.resolve("compiled", "films/timed.mp4")
+    output.parent.mkdir(parents=True)
+    output.write_bytes(b"compiled")
+
+    response = client.get(f"/api/v1/clips/{clip_id}", headers=_headers()).json()
+
+    assert response["duration_seconds"] == 3.0
+    assert response["output_duration_seconds"] == 7.25
+    assert response["content_duration_seconds"] == 7.25
+    assert response["lead_in_duration_seconds"] == 0
+    assert response["tail_out_duration_seconds"] == 0
+    assert response["content_start_offset_seconds"] == 0
+    assert response["content_end_offset_seconds"] == 7.25
 
 
 def test_built_in_compatibility_profile_is_seeded(tmp_path: Path) -> None:

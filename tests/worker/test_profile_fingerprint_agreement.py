@@ -13,7 +13,10 @@ from cinema_collections_worker.paths import RootKey, SafePathResolver
 _SETTINGS = {"intro_reference": "intro.mp4", "outro_reference": "intro.mp4"}
 
 
-def _services(tmp_path: Path) -> tuple[CatalogService, JobService, SafePathResolver]:
+def _services(
+    tmp_path: Path, *, lead_in_duration: float = 2.0, tail_out_duration: float = 2.0
+) -> tuple[CatalogService, JobService, SafePathResolver]:
+    tmp_path.mkdir(parents=True, exist_ok=True)
     for key in RootKey:
         (tmp_path / key.value).mkdir(parents=True, exist_ok=True)
     resolver = SafePathResolver({key.value: tmp_path / key.value for key in RootKey})
@@ -32,8 +35,19 @@ def _services(tmp_path: Path) -> tuple[CatalogService, JobService, SafePathResol
             ("films", "Films", 1, "films", "films", "p", 0, "now", "now"),
         )
     return (
-        CatalogService(database, resolver),
-        JobService(database, resolver, disk_reserve_bytes=0),
+        CatalogService(
+            database,
+            resolver,
+            lead_in_duration=lead_in_duration,
+            tail_out_duration=tail_out_duration,
+        ),
+        JobService(
+            database,
+            resolver,
+            disk_reserve_bytes=0,
+            lead_in_duration=lead_in_duration,
+            tail_out_duration=tail_out_duration,
+        ),
         resolver,
     )
 
@@ -65,3 +79,19 @@ def test_the_two_file_fingerprint_helpers_return_one_answer(tmp_path: Path) -> N
     target.write_bytes(b"some bytes")
 
     assert catalog._fingerprint(target) == jobs._file_fingerprint(target)
+
+
+def test_catalog_and_compile_fingerprints_include_both_margins(tmp_path: Path) -> None:
+    catalog, jobs, resolver = _services(
+        tmp_path / "calibrated", lead_in_duration=0.75, tail_out_duration=3.25
+    )
+    default_jobs = JobService(
+        jobs.db, resolver, disk_reserve_bytes=0, lead_in_duration=2.0, tail_out_duration=2.0
+    )
+
+    _, catalog_fingerprint = catalog._profile_details(_SETTINGS)
+    _, jobs_fingerprint = jobs._profile("films")
+    _, default_fingerprint = default_jobs._profile("films")
+
+    assert catalog_fingerprint == jobs_fingerprint
+    assert jobs_fingerprint != default_fingerprint

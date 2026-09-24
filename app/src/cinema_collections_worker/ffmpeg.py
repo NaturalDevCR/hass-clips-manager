@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -11,6 +12,13 @@ from .profile_validation import ProcessingProfile, validate_profile
 
 if TYPE_CHECKING:
     from .jobs import JobRecord
+
+
+def frame_aligned_duration(duration_seconds: float, frame_rate: int) -> float:
+    """Round a requested pad up to an integral number of output frames."""
+
+    frame_count = math.ceil(duration_seconds * frame_rate - 1e-9)
+    return frame_count / frame_rate
 
 
 class FfmpegCommandBuilder:
@@ -211,8 +219,33 @@ class FfmpegCommandBuilder:
         ):
             final_audio += loudnorm + ","
         graph.append(final_audio + "anull[a_final]")
+        video_label, audio_label = "v_final", "a_final"
+
+        lead_in = frame_aligned_duration(job.lead_in_duration_seconds, profile.video.fps)
+        tail_out = frame_aligned_duration(job.tail_out_duration_seconds, profile.video.fps)
+        video_pad_options: list[str] = []
+        audio_pads: list[str] = []
+        if lead_in > 0:
+            video_pad_options.extend([f"start_duration={lead_in:g}", "start_mode=add"])
+            delay_samples = round(lead_in * profile.audio.sample_rate)
+            audio_pads.append(f"adelay=delays={delay_samples}S:all=1")
+        if tail_out > 0:
+            video_pad_options.extend([f"stop_duration={tail_out:g}", "stop_mode=add"])
+            audio_pads.append(f"apad=pad_dur={tail_out:g}")
+        if video_pad_options:
+            video_pad_options.append("color=black")
+            graph.append(f"[{video_label}]tpad={':'.join(video_pad_options)}[v_padded]")
+            graph.append(f"[{audio_label}]{','.join(audio_pads)}[a_padded]")
+            video_label, audio_label = "v_padded", "a_padded"
         command.extend(
-            ["-filter_complex", ";".join(graph), "-map", "[v_final]", "-map", "[a_final]"]
+            [
+                "-filter_complex",
+                ";".join(graph),
+                "-map",
+                f"[{video_label}]",
+                "-map",
+                f"[{audio_label}]",
+            ]
         )
         command.extend(
             [

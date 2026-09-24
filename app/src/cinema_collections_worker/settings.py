@@ -68,6 +68,8 @@ class AppOptions(BaseModel):
     media_root: Path | None = None
     temp_root: Path | None = None
     assets_root: Path | None = None
+    lead_in_duration: float = Field(default=2.0, ge=0, allow_inf_nan=False)
+    tail_out_duration: float = Field(default=2.0, ge=0, allow_inf_nan=False)
 
     @field_validator("bind_host")
     @classmethod
@@ -141,6 +143,8 @@ class WorkerSettings(BaseModel):
     database_path: Path
     log_dir: Path
     temp_dir: Path
+    lead_in_duration: float = Field(default=2.0, ge=0, allow_inf_nan=False)
+    tail_out_duration: float = Field(default=2.0, ge=0, allow_inf_nan=False)
 
     @field_validator("bearer_secret")
     @classmethod
@@ -186,6 +190,8 @@ class WorkerSettings(BaseModel):
             bearer_secret=options.bearer_secret,
             disk_reserve_bytes=options.disk_reserve_bytes,
             hardware_acceleration=options.hardware_acceleration,
+            lead_in_duration=options.lead_in_duration,
+            tail_out_duration=options.tail_out_duration,
             roots=roots,
             database_path=data_dir / "worker.sqlite3",
             log_dir=data_dir / "logs",

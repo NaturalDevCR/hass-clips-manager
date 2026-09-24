@@ -24,6 +24,11 @@ class ClipAvailability:
     output_available: bool
     output_duration_seconds: float | None = None
     relative_source_path: str = ""
+    content_duration_seconds: float | None = None
+    lead_in_duration_seconds: float | None = None
+    tail_out_duration_seconds: float | None = None
+    content_start_offset_seconds: float | None = None
+    content_end_offset_seconds: float | None = None
 
     @classmethod
     def from_worker_clip(cls, clip: WorkerClip) -> ClipAvailability:
@@ -37,6 +42,11 @@ class ClipAvailability:
             output_available=clip.output_available,
             output_duration_seconds=clip.output_duration_seconds,
             relative_source_path=clip.relative_source_path,
+            content_duration_seconds=clip.content_duration_seconds,
+            lead_in_duration_seconds=clip.lead_in_duration_seconds,
+            tail_out_duration_seconds=clip.tail_out_duration_seconds,
+            content_start_offset_seconds=clip.content_start_offset_seconds,
+            content_end_offset_seconds=clip.content_end_offset_seconds,
         )
 
 
@@ -81,6 +91,12 @@ class SelectResponse:
     duration_seconds: float | None
     history_reset: bool
     output_is_stale: bool = False
+    duration: float | None = None
+    content_duration: float | None = None
+    lead_in_duration: float | None = None
+    tail_out_duration: float | None = None
+    content_start_offset: float | None = None
+    content_end_offset: float | None = None
 
 
 class SelectionService:
@@ -163,6 +179,7 @@ class SelectionService:
         chosen = next(clip for clip in candidates if clip.id == selected.clip_id)
         output_path = chosen.relative_output_path
         assert output_path is not None
+        timing = _selection_timing(chosen)
         return SelectResponse(
             collection_id=request.collection_id,
             clip_id=chosen.id,
@@ -171,7 +188,48 @@ class SelectionService:
             duration_seconds=chosen.output_duration_seconds,
             history_reset=selected.history_reset,
             output_is_stale=chosen.state != "ready",
+            **timing,
         )
+
+
+def _selection_timing(clip: ClipAvailability) -> dict[str, float | None]:
+    """Return validated compiled-file bounds, defaulting legacy outputs to the full file."""
+    duration = clip.output_duration_seconds
+    values = (
+        clip.content_duration_seconds,
+        clip.lead_in_duration_seconds,
+        clip.tail_out_duration_seconds,
+        clip.content_start_offset_seconds,
+        clip.content_end_offset_seconds,
+    )
+    if duration is None:
+        return {
+            "duration": None,
+            "content_duration": None,
+            "lead_in_duration": None,
+            "tail_out_duration": None,
+            "content_start_offset": None,
+            "content_end_offset": None,
+        }
+    if all(value is not None for value in values):
+        content_duration, lead_in, tail_out, content_start, content_end = values
+        assert all(value is not None for value in values)
+        return {
+            "duration": duration,
+            "content_duration": content_duration,
+            "lead_in_duration": lead_in,
+            "tail_out_duration": tail_out,
+            "content_start_offset": content_start,
+            "content_end_offset": content_end,
+        }
+    return {
+        "duration": duration,
+        "content_duration": duration,
+        "lead_in_duration": 0.0,
+        "tail_out_duration": 0.0,
+        "content_start_offset": 0.0,
+        "content_end_offset": duration,
+    }
 
 
 def _default_media_uri(relative_output_path: str) -> str:

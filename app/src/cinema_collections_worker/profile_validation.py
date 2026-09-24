@@ -217,7 +217,9 @@ def validate_profile(profile: ProcessingProfile) -> ProcessingProfile:
 
 
 def profile_fingerprint(
-    profile: ProcessingProfile, assets: AssetFingerprints | Mapping[str, object]
+    profile: ProcessingProfile,
+    assets: AssetFingerprints | Mapping[str, object],
+    compile_options: Mapping[str, object] | None = None,
 ) -> str:
     """Return a stable SHA-256 fingerprint of settings and referenced assets."""
     assets_model = AssetFingerprints.model_validate(assets)
@@ -225,6 +227,8 @@ def profile_fingerprint(
         "profile": validate_profile(profile).model_dump(mode="json"),
         "assets": assets_model.model_dump(mode="json"),
     }
+    if compile_options is not None:
+        payload["compile_options"] = dict(compile_options)
     canonical = json.dumps(
         payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True
     ).encode()

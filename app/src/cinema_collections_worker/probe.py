@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import math
 import subprocess
 from dataclasses import dataclass, field
 from fractions import Fraction
@@ -20,6 +21,8 @@ class MediaProbeResult:
     height: int | None = None
     frame_rate: float | None = None
     has_audio: bool = False
+    video_duration_seconds: float | None = None
+    audio_duration_seconds: float | None = None
     streams: list[dict[str, object]] = field(default_factory=list)
     size_bytes: int | None = None
     error: str | None = None
@@ -34,6 +37,24 @@ def _rate(value: object) -> float | None:
         return None
     except (ValueError, ZeroDivisionError, TypeError):
         return None
+
+
+def _stream_duration(stream: dict[str, object]) -> float | None:
+    duration = _rate(stream.get("duration"))
+    if duration is not None and math.isfinite(duration) and duration >= 0:
+        return duration
+    duration_ts = stream.get("duration_ts")
+    time_base = _rate(stream.get("time_base"))
+    if (
+        isinstance(duration_ts, (int, float))
+        and not isinstance(duration_ts, bool)
+        and time_base is not None
+        and math.isfinite(time_base)
+        and duration_ts >= 0
+    ):
+        calculated = float(duration_ts) * time_base
+        return calculated if math.isfinite(calculated) else None
+    return None
 
 
 class ProbeClient:
@@ -72,6 +93,9 @@ class ProbeClient:
             video = next(
                 (s for s in streams if isinstance(s, dict) and s.get("codec_type") == "video"), None
             )
+            audio = next(
+                (s for s in streams if isinstance(s, dict) and s.get("codec_type") == "audio"), None
+            )
             duration = float(fmt["duration"])
             if duration < 0 or video is None:
                 raise ValueError
@@ -83,6 +107,8 @@ class ProbeClient:
                 height=int(video["height"]) if video.get("height") is not None else None,
                 frame_rate=_rate(video.get("r_frame_rate")),
                 has_audio=any(s.get("codec_type") == "audio" for s in parsed_streams),
+                video_duration_seconds=_stream_duration(video),
+                audio_duration_seconds=_stream_duration(audio) if audio is not None else None,
                 streams=parsed_streams,
                 size_bytes=int(fmt["size"]) if fmt.get("size") is not None else None,
             )

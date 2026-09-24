@@ -8,6 +8,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import math
 import shutil
 import uuid
 from collections.abc import Callable
@@ -54,7 +55,7 @@ from .repositories import (
 from .sanitization import sanitize_message
 from .settings import WorkerSettings
 
-WORKER_VERSION = "1.10.1"
+WORKER_VERSION = "1.11.0"
 API_VERSION = "1.0.0"
 MIN_CLIENT_VERSION = "1.0.0"
 MAX_CLIENT_VERSION = "1.x"
@@ -567,13 +568,20 @@ def create_app(settings: WorkerSettings) -> FastAPI:
     app.state.collections = collections
     app.state.profiles = profiles
     app.state.queue = queue
-    app.state.catalog = CatalogService(database, resolver)
+    app.state.catalog = CatalogService(
+        database,
+        resolver,
+        lead_in_duration=settings.lead_in_duration,
+        tail_out_duration=settings.tail_out_duration,
+    )
     app.state.jobs = JobService(
         database,
         resolver,
         disk_reserve_bytes=settings.disk_reserve_bytes,
         queue=queue,
         catalog=app.state.catalog,
+        lead_in_duration=settings.lead_in_duration,
+        tail_out_duration=settings.tail_out_duration,
     )
     app.state.library_manager = LibraryManager(
         database,
@@ -1004,6 +1012,50 @@ def create_app(settings: WorkerSettings) -> FastAPI:
 
 
 def _clip_from_row(row: Any) -> ClipRecord:
+    output_duration = row["output_duration_seconds"]
+    timing: dict[str, float | None] = {
+        "content_duration_seconds": None,
+        "lead_in_duration_seconds": None,
+        "tail_out_duration_seconds": None,
+        "content_start_offset_seconds": None,
+        "content_end_offset_seconds": None,
+    }
+    if bool(row["output_available"]) and output_duration is not None:
+        total = float(output_duration)
+        metadata = json.loads(row["metadata"] or "{}")
+        names = tuple(timing)
+        values = [metadata.get(name) for name in names]
+        valid_values = all(
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and math.isfinite(float(value))
+            and float(value) >= 0
+            for value in values
+        )
+        if valid_values:
+            (
+                content_duration,
+                lead_in,
+                tail_out,
+                content_start,
+                content_end,
+            ) = (float(value) for value in values)
+            valid_bounds = (
+                content_start <= content_end <= total
+                and math.isclose(content_end - content_start, content_duration, abs_tol=0.05)
+                and math.isclose(total - content_end, tail_out, abs_tol=0.05)
+                and math.isclose(content_start, lead_in, abs_tol=0.05)
+            )
+            if valid_bounds:
+                timing = dict(zip(names, values, strict=True))
+        if timing["content_duration_seconds"] is None:
+            timing = {
+                "content_duration_seconds": total,
+                "lead_in_duration_seconds": 0.0,
+                "tail_out_duration_seconds": 0.0,
+                "content_start_offset_seconds": 0.0,
+                "content_end_offset_seconds": total,
+            }
     return ClipRecord.model_validate(
         {
             "id": row["id"],
@@ -1012,7 +1064,8 @@ def _clip_from_row(row: Any) -> ClipRecord:
             "relative_source_path": row["relative_source_path"],
             "relative_output_path": row["relative_output_path"],
             "duration_seconds": row["duration_seconds"],
-            "output_duration_seconds": row["output_duration_seconds"],
+            "output_duration_seconds": output_duration,
+            **timing,
             "output_available": bool(row["output_available"]),
             "metadata": json.loads(row["metadata"] or "{}"),
             "updated_at": row["updated_at"],

@@ -159,3 +159,31 @@ def test_list_routes_return_typed_paginated_items() -> None:
         page_schema = schema["components"]["schemas"][schema_name]
         item_schema = page_schema["properties"]["items"]["items"]
         assert item_schema["$ref"].startswith("#/components/schemas/")
+
+
+def test_clip_timing_properties_are_optional_seconds() -> None:
+    schema = load_schema()
+    clip = schema["components"]["schemas"]["Clip"]
+    timing_fields = {
+        "content_duration_seconds",
+        "lead_in_duration_seconds",
+        "tail_out_duration_seconds",
+        "content_start_offset_seconds",
+        "content_end_offset_seconds",
+    }
+
+    assert set(clip["required"]) == {
+        "id",
+        "collection_id",
+        "state",
+        "relative_source_path",
+        "relative_output_path",
+        "duration_seconds",
+        "output_available",
+    }
+    assert not (timing_fields & set(clip["required"]))
+    for name in timing_fields:
+        field = clip["properties"][name]
+        assert field["type"] == "number"
+        assert field["minimum"] == 0
+        assert "seconds" in field["description"]

@@ -17,4 +17,12 @@ The Worker accepts only typed processing-profile fields and paths resolved under
 3. The integration polls `/health` and `/status`, exposing state through sensors and controls through buttons and services.
 4. An automation calls `cinema_collections.select_next_clip`; the response contains a Media Source URI for the existing playback automation to adopt.
 
+Compiled files can include configurable leading and trailing black and silent
+margins. The Worker measures the final file and returns its total duration,
+content duration, margin lengths, and content offsets with clip availability.
+`select_next_clip` passes these timings to the automation while preserving the
+existing `duration_seconds` response. Home Assistant remains responsible for
+showing and hiding the projector image around Cast's UI; Cinema Collections
+prepares the file and its timing metadata only.
+
 Diagnostics contain bounded snapshots of this state. They remove bearer credentials and absolute paths, while preserving compatibility, queue, and sanitized error information for support.

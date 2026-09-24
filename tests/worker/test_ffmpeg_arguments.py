@@ -90,6 +90,8 @@ def test_builder_without_rate_control_or_keyframe_fields_returns_the_legacy_argv
         profile_fingerprint="profile",
         profile_settings=profile.model_dump(mode="json"),
         duration_seconds=10,
+        lead_in_duration_seconds=0,
+        tail_out_duration_seconds=0,
         source_path=tmp_path / "source.mp4",
         temporary_output_path=tmp_path / "out.mp4",
     )
@@ -196,3 +198,82 @@ def test_builder_honors_h264_profile_level_and_decode_failure_policy(tmp_path):
     assert command[command.index("-profile:v") + 1] == "high"
     assert command[command.index("-level:v") + 1] == "5.1"
     assert "-xerror" in command
+
+
+def test_builder_wraps_processed_audio_video_in_black_silence_segments(tmp_path):
+    profile = ProcessingProfile(video={"width": 1920, "height": 1080, "fps": 24})
+    job = JobRecord(
+        id="job-margins",
+        collection_id="films",
+        clip_id="clip-margins",
+        source_relative_path="films/source.mp4",
+        output_relative_path="films/result.mp4",
+        source_fingerprint="source",
+        profile_fingerprint="profile",
+        profile_settings=profile.model_dump(mode="json"),
+        duration_seconds=10,
+        source_path=tmp_path / "source.mp4",
+        temporary_output_path=tmp_path / "out.mp4",
+    )
+
+    command = FfmpegCommandBuilder().build(job)
+    graph = command[command.index("-filter_complex") + 1]
+
+    assert "tpad=start_duration=2:start_mode=add:stop_duration=2:stop_mode=add:color=black" in graph
+    assert "adelay=delays=96000S:all=1" in graph
+    assert "apad=pad_dur=2" in graph
+    assert "[v_padded]" in command and "[a_padded]" in command
+    assert "xfade" not in graph and "acrossfade" not in graph
+
+
+def test_builder_omits_zero_length_margin_segments(tmp_path):
+    profile = ProcessingProfile()
+    job = JobRecord(
+        id="job-no-margins",
+        collection_id="films",
+        clip_id="clip-no-margins",
+        source_relative_path="films/source.mp4",
+        output_relative_path="films/result.mp4",
+        source_fingerprint="source",
+        profile_fingerprint="profile",
+        profile_settings=profile.model_dump(mode="json"),
+        duration_seconds=10,
+        lead_in_duration_seconds=0,
+        tail_out_duration_seconds=0,
+        source_path=tmp_path / "source.mp4",
+        temporary_output_path=tmp_path / "out.mp4",
+    )
+
+    command = FfmpegCommandBuilder().build(job)
+    graph = command[command.index("-filter_complex") + 1]
+
+    assert "color=c=black" not in graph
+    assert "tpad=" not in graph
+    assert "adelay=" not in graph and "apad=" not in graph
+    assert "[v_final]" in command and "[a_final]" in command
+
+
+def test_builder_rounds_fractional_margins_to_a_synchronized_frame_timeline(tmp_path):
+    profile = ProcessingProfile(video={"width": 1920, "height": 1080, "fps": 24})
+    job = JobRecord(
+        id="job-fractional-margins",
+        collection_id="films",
+        clip_id="clip-fractional-margins",
+        source_relative_path="films/source.mp4",
+        output_relative_path="films/result.mp4",
+        source_fingerprint="source",
+        profile_fingerprint="profile",
+        profile_settings=profile.model_dump(mode="json"),
+        duration_seconds=10,
+        lead_in_duration_seconds=0.75,
+        tail_out_duration_seconds=1.125,
+        source_path=tmp_path / "source.mp4",
+        temporary_output_path=tmp_path / "out.mp4",
+    )
+
+    command = FfmpegCommandBuilder().build(job)
+    graph = command[command.index("-filter_complex") + 1]
+
+    assert "start_duration=0.75" in graph and "stop_duration=1.125" in graph
+    assert "adelay=delays=36000S:all=1" in graph
+    assert "apad=pad_dur=1.125" in graph
