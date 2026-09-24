@@ -7,12 +7,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 from .database import Database
 from .paths import PathSafetyError, RootKey, SafePathResolver, validate_relative_path
@@ -120,6 +121,45 @@ class CatalogService:
             },
         )
 
+    def _retain_output_timing(self, metadata: dict[str, Any], existing: Any) -> dict[str, Any]:
+        """Keep measured bounds only while they still identify the same output file."""
+        if (
+            existing is None
+            or not existing["output_available"]
+            or not existing["relative_output_path"]
+        ):
+            return metadata
+        previous = json.loads(existing["metadata"] or "{}")
+        timing_names = (
+            "content_duration_seconds",
+            "lead_in_duration_seconds",
+            "tail_out_duration_seconds",
+            "content_start_offset_seconds",
+            "content_end_offset_seconds",
+        )
+        values = [previous.get(name) for name in timing_names]
+        if not all(
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and math.isfinite(float(value))
+            and float(value) >= 0
+            for value in values
+        ):
+            return metadata
+        try:
+            output_path = self.resolver.resolve(
+                RootKey.COMPILED.value, str(existing["relative_output_path"])
+            )
+            if output_path.is_symlink() or not output_path.is_file():
+                return metadata
+            if previous.get("output_fingerprint") != self._fingerprint(output_path):
+                return metadata
+        except (OSError, ValueError):
+            return metadata
+        metadata.update({name: previous[name] for name in timing_names})
+        metadata["output_fingerprint"] = previous["output_fingerprint"]
+        return metadata
+
     def scan(self, collection_ids: set[str] | None = None) -> ScanSummary:
         selected = collection_ids
         rows = self.db.connection.execute("SELECT * FROM collections WHERE enabled=1").fetchall()
@@ -151,7 +191,7 @@ class CatalogService:
                         probe = self.probe_client.probe(path)
                     except Exception:
                         probe = MediaProbeResult(valid=False, error="media probe failed")
-                    metadata = {
+                    metadata: dict[str, Any] = {
                         "source_fingerprint": fingerprint,
                         "profile_fingerprint": current_profile_fingerprint,
                         "has_audio": probe.has_audio,
@@ -182,13 +222,14 @@ class CatalogService:
                         ]
                         if len(missing_candidates) == 1:
                             existing = missing_candidates[0]
+                            retained_metadata = self._retain_output_timing(metadata, existing)
                             self.db.connection.execute(
                                 "UPDATE clips SET relative_source_path=?, state=?, duration_seconds=?, metadata=?, updated_at=? WHERE id=?",
                                 (
                                     relative,
                                     state,
                                     probe.duration_seconds,
-                                    json.dumps(metadata, sort_keys=True),
+                                    json.dumps(retained_metadata, sort_keys=True),
                                     now,
                                     existing["id"],
                                 ),
@@ -215,6 +256,7 @@ class CatalogService:
                         added += 1
                     else:
                         old_meta = json.loads(existing["metadata"])
+                        metadata = self._retain_output_timing(metadata, existing)
                         changed = old_meta.get("source_fingerprint") != fingerprint
                         profile_changed = (
                             old_meta.get("profile_fingerprint") != current_profile_fingerprint

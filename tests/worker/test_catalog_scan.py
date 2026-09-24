@@ -1,6 +1,6 @@
 import json
 
-from cinema_collections_worker.catalog import CatalogService
+from cinema_collections_worker.catalog import CatalogService, file_fingerprint
 from cinema_collections_worker.database import Database
 from cinema_collections_worker.domain import CollectionCreate, ProfileCreate
 from cinema_collections_worker.models import ClipState
@@ -79,6 +79,38 @@ def test_scan_output_extension_comes_from_validated_profile_not_source(tmp_path)
 
     output = db.connection.execute("SELECT relative_output_path FROM clips").fetchone()[0]
     assert output.endswith(".mp4")
+
+
+def test_scan_preserves_timing_metadata_for_the_same_compiled_output(tmp_path):
+    db, source, service = setup(tmp_path)
+    (source / "one.mp4").write_bytes(b"source")
+    service.scan()
+    output = service.resolver.roots[RootKey.COMPILED] / "films" / "out.mp4"
+    output.parent.mkdir(parents=True)
+    output.write_bytes(b"compiled")
+    metadata = {
+        "source_fingerprint": file_fingerprint(source / "one.mp4"),
+        "profile_fingerprint": "profile",
+        "output_fingerprint": file_fingerprint(output),
+        "content_duration_seconds": 3.0,
+        "lead_in_duration_seconds": 2.0,
+        "tail_out_duration_seconds": 2.0,
+        "content_start_offset_seconds": 2.0,
+        "content_end_offset_seconds": 5.0,
+    }
+    db.connection.execute(
+        "UPDATE clips SET state='ready', output_available=1, output_duration_seconds=7.0, "
+        "relative_output_path='films/out.mp4', metadata=?",
+        (json.dumps(metadata),),
+    )
+    db.connection.commit()
+
+    service.scan()
+
+    persisted = json.loads(db.connection.execute("SELECT metadata FROM clips").fetchone()[0])
+    assert persisted["output_fingerprint"] == file_fingerprint(output)
+    assert persisted["content_start_offset_seconds"] == 2.0
+    assert persisted["content_end_offset_seconds"] == 5.0
 
 
 def test_scan_change_stales_and_missing_preserves_output(tmp_path):
