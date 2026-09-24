@@ -36,6 +36,7 @@ class WorkerClip:
     relative_output_path: str | None
     duration_seconds: float
     output_available: bool
+    output_duration_seconds: float | None = None
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any]) -> WorkerClip:
@@ -46,6 +47,16 @@ class WorkerClip:
                 "Worker response field 'relative_output_path' must be a string or null"
             )
         duration_seconds = payload.get("duration_seconds")
+        output_duration_seconds = payload.get("output_duration_seconds")
+        if output_duration_seconds is not None and (
+            isinstance(output_duration_seconds, bool)
+            or not isinstance(output_duration_seconds, (int, float))
+            or output_duration_seconds < 0
+        ):
+            raise WorkerContractError(
+                "Worker response field 'output_duration_seconds' must be a non-negative number "
+                "or null"
+            )
         if (
             isinstance(duration_seconds, bool)
             or not isinstance(duration_seconds, (int, float))
@@ -63,6 +74,9 @@ class WorkerClip:
             state=_required_string(payload, "state"),
             relative_output_path=relative_output_path,
             duration_seconds=float(duration_seconds),
+            output_duration_seconds=(
+                float(output_duration_seconds) if output_duration_seconds is not None else None
+            ),
             output_available=output_available,
         )
 

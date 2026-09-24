@@ -707,10 +707,11 @@ class JobWorker:
             metadata["height"] = probe.height
             with self.db.transaction():
                 self.db.connection.execute(
-                    "UPDATE clips SET state=?, duration_seconds=?, metadata=?, updated_at=? WHERE id=?",
+                    "UPDATE clips SET state=?, duration_seconds=?, output_duration_seconds=?, metadata=?, updated_at=? WHERE id=?",
                     (
                         ClipState.DISCOVERED.value,
                         probe.duration_seconds,
+                        None,
                         json.dumps(metadata, sort_keys=True),
                         _now().isoformat(),
                         job.clip_id,
@@ -1057,9 +1058,14 @@ class JobWorker:
             )
             with self.db.transaction():
                 self.db.connection.execute(
-                    "UPDATE clips SET state='ready', output_available=1, metadata=?, updated_at=? "
+                    "UPDATE clips SET state='ready', output_available=1, output_duration_seconds=?, metadata=?, updated_at=? "
                     "WHERE id=?",
-                    (json.dumps(metadata, sort_keys=True), _now().isoformat(), job.clip_id),
+                    (
+                        probe.duration_seconds,
+                        json.dumps(metadata, sort_keys=True),
+                        _now().isoformat(),
+                        job.clip_id,
+                    ),
                 )
             finished = self._finish(job, JobState.SUCCEEDED)
             self._record_log("info", "compilation completed", job.id)

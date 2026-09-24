@@ -6,6 +6,7 @@ export interface Clip {
   output_available: boolean;
   state: string;
   duration_seconds: number;
+  output_duration_seconds?: number | null;
   sequential_rank: number;
   tags: string[];
   notes: string;

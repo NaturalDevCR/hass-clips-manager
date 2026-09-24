@@ -68,6 +68,7 @@ class ClipRecord(BaseModel):
     relative_source_path: str
     relative_output_path: str | None = None
     duration_seconds: float = Field(ge=0)
+    output_duration_seconds: float | None = Field(default=None, ge=0)
     output_available: bool = False
     metadata: dict[str, Any] = Field(default_factory=dict)
     updated_at: datetime | None = None

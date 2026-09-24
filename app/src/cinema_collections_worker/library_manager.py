@@ -116,6 +116,7 @@ class LibraryManager:
                 "relative_source_path": row["relative_source_path"],
                 "relative_output_path": row["relative_output_path"],
                 "duration_seconds": row["duration_seconds"],
+                "output_duration_seconds": row["output_duration_seconds"],
                 "output_available": bool(row["output_available"]),
                 "metadata": json.loads(row["metadata"] or "{}"),
                 "updated_at": row["updated_at"],

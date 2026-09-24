@@ -53,7 +53,7 @@ from .repositories import (
 from .sanitization import sanitize_message
 from .settings import WorkerSettings
 
-WORKER_VERSION = "1.9.0"
+WORKER_VERSION = "1.10.0"
 API_VERSION = "1.0.0"
 MIN_CLIENT_VERSION = "1.0.0"
 MAX_CLIENT_VERSION = "1.x"
@@ -1006,6 +1006,7 @@ def _clip_from_row(row: Any) -> ClipRecord:
             "relative_source_path": row["relative_source_path"],
             "relative_output_path": row["relative_output_path"],
             "duration_seconds": row["duration_seconds"],
+            "output_duration_seconds": row["output_duration_seconds"],
             "output_available": bool(row["output_available"]),
             "metadata": json.loads(row["metadata"] or "{}"),
             "updated_at": row["updated_at"],

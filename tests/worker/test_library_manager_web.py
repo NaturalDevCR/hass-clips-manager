@@ -430,7 +430,8 @@ def test_manager_clips_report_output_duration_and_tags(tmp_path: Path) -> None:
     with client.app.state.database.connection:
         client.app.state.database.connection.execute(
             "INSERT INTO clips(id,collection_id,state,relative_source_path,relative_output_path,"
-            "duration_seconds,output_available,metadata,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
+            "duration_seconds,output_duration_seconds,output_available,metadata,updated_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?)",
             (
                 "22222222-2222-2222-2222-222222222222",
                 "films",
@@ -438,6 +439,7 @@ def test_manager_clips_report_output_duration_and_tags(tmp_path: Path) -> None:
                 "films/ready.mp4",
                 "films/22222222-2222-2222-2222-222222222222.mp4",
                 125.5,
+                121.25,
                 1,
                 '{"tags": ["night", "featured"]}',
                 "2026-01-01T00:00:00+00:00",
@@ -449,6 +451,7 @@ def test_manager_clips_report_output_duration_and_tags(tmp_path: Path) -> None:
     assert clip["relative_output_path"] == "films/22222222-2222-2222-2222-222222222222.mp4"
     assert clip["output_available"] is True
     assert clip["duration_seconds"] == 125.5
+    assert clip["output_duration_seconds"] == 121.25
     assert clip["tags"] == ["night", "featured"]
 
 
@@ -599,6 +602,7 @@ def test_manager_clips_route_returns_the_catalog_as_json(tmp_path: Path) -> None
         "output_available",
         "state",
         "duration_seconds",
+        "output_duration_seconds",
         "sequential_rank",
         "tags",
         "notes",
@@ -865,6 +869,26 @@ def test_manager_clip_source_route_404s_for_an_unknown_clip(tmp_path: Path) -> N
     _manager_session(client)
 
     assert client.get("/manager/clips/not-a-real-clip/source").status_code == 404
+
+
+def test_manager_clip_compiled_route_streams_published_output(tmp_path: Path) -> None:
+    client = TestClient(_app(tmp_path))
+    _seed_collection(client)
+    clip_id = _seed_catalogued_clip(client)
+    output = client.app.state.settings.roots[RootKey.COMPILED] / "films" / f"{clip_id}.mp4"
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_bytes(b"compiled-bytes")
+    with client.app.state.database.connection:
+        client.app.state.database.connection.execute(
+            "UPDATE clips SET output_available=1, relative_output_path=?, "
+            "output_duration_seconds=5.25 WHERE id=?",
+            (f"films/{clip_id}.mp4", clip_id),
+        )
+
+    response = client.get(f"/manager/clips/{clip_id}/compiled")
+
+    assert response.status_code == 200
+    assert response.content == b"compiled-bytes"
 
 
 def test_request_edit_rejects_a_trim_range_outside_the_clip_duration(tmp_path: Path) -> None:

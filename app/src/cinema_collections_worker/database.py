@@ -293,6 +293,14 @@ class Database:
             """)
             self.connection.execute("INSERT INTO schema_migrations VALUES (8, datetime('now'))")
             self.connection.commit()
+        if not self.connection.execute(
+            "SELECT 1 FROM schema_migrations WHERE version=9"
+        ).fetchone():
+            self.connection.executescript("""
+                ALTER TABLE clips ADD COLUMN output_duration_seconds REAL;
+            """)
+            self.connection.execute("INSERT INTO schema_migrations VALUES (9, datetime('now'))")
+            self.connection.commit()
 
     def close(self) -> None:
         with self._connections_lock:

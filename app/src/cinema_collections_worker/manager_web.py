@@ -138,7 +138,7 @@ def _clip_payloads(database: Any) -> list[dict[str, Any]]:
     """Return every live clip, ranked the way the playback-order editor expects."""
     rows = database.connection.execute(
         "SELECT id, collection_id, relative_source_path, relative_output_path, state, "
-        "output_available, duration_seconds, metadata FROM clips "
+        "output_available, duration_seconds, output_duration_seconds, metadata FROM clips "
         "WHERE state <> 'deleted' ORDER BY updated_at DESC, id DESC"
     ).fetchall()
     by_collection: dict[str, list[Any]] = {}
@@ -170,6 +170,11 @@ def _clip_payloads(database: Any) -> list[dict[str, Any]]:
                 "output_available": bool(row["output_available"]),
                 "state": state,
                 "duration_seconds": float(row["duration_seconds"] or 0),
+                "output_duration_seconds": (
+                    float(row["output_duration_seconds"])
+                    if row["output_duration_seconds"] is not None
+                    else None
+                ),
                 "sequential_rank": ranks[str(row["id"])],
                 "tags": [str(tag) for tag in tags],
                 "notes": str(metadata.get("notes") or ""),
@@ -289,6 +294,18 @@ def install_manager_routes(app: FastAPI, settings: WorkerSettings) -> None:
             path = manager._source_path(row)
         except (KeyError, ValueError) as exc:
             raise HTTPException(status_code=404, detail="clip source is unavailable") from exc
+        return FileResponse(path, filename=path.name)
+
+    @app.get("/manager/clips/{clip_id}/compiled", include_in_schema=False)
+    def clip_compiled(request: Request, clip_id: str) -> FileResponse:
+        if _valid_session(request) is None:
+            raise HTTPException(status_code=401, detail="Library Manager session required")
+        manager = request.app.state.library_manager
+        try:
+            row = manager._clip_row(clip_id)
+            path = manager._output_path(row)
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status_code=404, detail="compiled clip is unavailable") from exc
         return FileResponse(path, filename=path.name)
 
     @app.get("/manager/collections", include_in_schema=False)

@@ -45,6 +45,7 @@ def clip(
     state: str = "ready",
     output_available: bool = True,
     output_path: str | None = None,
+    output_duration: float | None = None,
 ) -> ClipAvailability:
     """Create a full Worker clip availability record."""
     return ClipAvailability(
@@ -54,6 +55,7 @@ def clip(
         relative_output_path=output_path or f"{collection_id}/{identifier}.mp4",
         duration_seconds=42.5,
         output_available=output_available,
+        output_duration_seconds=output_duration,
     )
 
 
@@ -99,6 +101,19 @@ async def test_service_uses_only_current_ready_worker_clips_and_returns_media_de
     assert response.media_uri == "media-source://media_source/local/films/ready.mp4"
     assert response.duration_seconds == 42.5
     assert response.history_reset is False
+
+
+@pytest.mark.asyncio
+async def test_selection_reports_compiled_duration_when_worker_has_it(hass: object) -> None:
+    service = await make_service(
+        hass,
+        (clip("compiled", output_duration=37.25),),
+        "selection-compiled-duration",
+    )
+
+    response = await service.async_select(SelectRequest(collection_id="films"))
+
+    assert response.duration_seconds == 37.25
 
 
 @pytest.mark.asyncio

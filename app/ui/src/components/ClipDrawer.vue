@@ -22,6 +22,9 @@ const destination = ref(props.clip.relative_source_path);
 const trashTarget = ref("source");
 const deleteTarget = ref("source");
 const editorOpen = ref(false);
+const previewVersion = ref(0);
+const sourcePreviewUrl = computed(() => `manager/clips/${props.clip.id}/source?v=${previewVersion.value}`);
+const compiledPreviewUrl = computed(() => `manager/clips/${props.clip.id}/compiled?v=${previewVersion.value}`);
 
 // An unavailable output cannot be trashed or deleted, so it is never offered.
 const targets = computed(() =>
@@ -44,7 +47,9 @@ watch(
     deleteTarget.value = "source";
     status.value = "";
     failure.value = "";
+    previewVersion.value += 1;
   },
+  { deep: true },
 );
 
 function onKeydown(event: KeyboardEvent): void {
@@ -209,6 +214,20 @@ async function copyId(): Promise<void> {
             Output: {{ clip.output_available ? clip.relative_output_path : "not compiled" }}
           </p>
           <button type="button" class="btn self-start" @click="copyId">Copy clip ID</button>
+        </section>
+
+        <section class="flex flex-col gap-4">
+          <div class="flex flex-col gap-2">
+            <h3 class="text-xs tracking-widest text-muted uppercase">Source preview</h3>
+            <video :key="sourcePreviewUrl" :src="sourcePreviewUrl" class="w-full rounded-lg bg-black" controls preload="metadata" />
+            <p class="text-xs text-muted">{{ formatDuration(clip.duration_seconds) }}</p>
+          </div>
+          <div v-if="clip.output_available" class="flex flex-col gap-2">
+            <h3 class="text-xs tracking-widest text-muted uppercase">Compiled preview</h3>
+            <video :key="compiledPreviewUrl" :src="compiledPreviewUrl" class="w-full rounded-lg bg-black" controls preload="metadata" />
+            <p class="text-xs text-muted">{{ clip.output_duration_seconds == null ? 'Duration unavailable' : formatDuration(clip.output_duration_seconds) }}</p>
+          </div>
+          <p v-else class="text-xs text-muted">No compiled preview yet.</p>
         </section>
 
         <section class="flex flex-col gap-2">
